@@ -3,7 +3,7 @@ uvicorn==0.54.0
 PyJWT==2.15.1
 python-dotenv==1.2.4
 openpyxl==3.1.5
-pwdlib==0.4.2
+pwdlib[argon2]==0.4.2
 python-multipart==0.0.34
 
 psycopg[binary]==3.2.10
