@@ -249,13 +249,7 @@ function AuthScreen({ onRegister, loading }) {
       <SmokeBackground />
 
       <ScrollView contentContainerStyle={styles.authContainer}>
-        <View style={styles.authBrand}>
-          <Image
-            source={require('./assets/veyra-logo.png')}
-            style={styles.authLogo}
-            resizeMode="contain"
-/>
-        </View>
+        
 
         <View style={styles.authHeading}>
           <Text style={styles.authEyebrow}>EXCLUSIVE CREATOR ACCESS</Text>
@@ -2239,5 +2233,6 @@ const styles = StyleSheet.create({
     height: 25,
   },
 }); 
+
 
 
