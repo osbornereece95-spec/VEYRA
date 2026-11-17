@@ -16,7 +16,7 @@ import * as SecureStore from 'expo-secure-store';
 import * as ImagePicker from 'expo-image-picker';
 import { File } from 'expo-file-system';
 
-const API_URL = 'http://192.168.0.197:8000';
+const API_URL = 'https://your-render-url.onrender.com';
 
 const C = {
   black: '#050505',
