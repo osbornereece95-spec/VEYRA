@@ -1,0 +1,333 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VEYRA | Admin</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#080808;color:#fff;font-family:Arial,sans-serif;padding:35px 20px}
+.container{max-width:850px;margin:auto}
+.brand{font-size:27px;letter-spacing:9px;font-weight:bold}
+.sub{color:#888;font-size:11px;letter-spacing:4px;margin-top:9px}
+.line{border-bottom:1px solid #292929;margin:28px 0}
+.panel{background:#111;border:1px solid #292929;padding:25px;margin-bottom:20px}
+h2{font-size:13px;letter-spacing:3px;margin:0 0 22px}
+label{display:block;color:#999;font-size:12px;margin-bottom:9px}
+input{width:100%;background:#080808;color:white;border:1px solid #383838;padding:14px;margin-bottom:17px;outline:none}
+button{background:white;color:black;border:0;padding:14px 19px;font-weight:bold;cursor:pointer;letter-spacing:1px}
+button:disabled{opacity:.5;cursor:wait}
+.secondary{background:#292929;color:white}
+.result{display:none;margin-top:20px;padding:22px;background:#080808;border:1px solid #555}
+.code{font-size:25px;letter-spacing:3px;margin:15px 0;overflow-wrap:anywhere;font-weight:bold}
+.hint{color:#777;font-size:12px;line-height:1.6}
+.message{color:#ccc;font-size:13px;margin-top:15px;white-space:pre-wrap}
+.status{color:#aaa;font-size:13px;margin-top:15px;white-space:pre-wrap}
+.creator{background:#080808;border:1px solid #292929;padding:17px;margin-top:14px}
+.creator-details{font-size:12px;color:#999;line-height:1.8;margin-bottom:12px}
+.creator strong{color:#fff}
+.creator-status{font-size:12px;color:#aaa;margin:0 0 12px;line-height:1.6}
+.creator input{margin-bottom:10px}
+.creator button{padding:11px 14px;font-size:11px}
+.management-list{margin-top:18px}
+@media(max-width:550px){
+body{padding:22px 12px}
+.panel{padding:18px}
+.brand{font-size:23px}
+}
+</style>
+</head>
+<body>
+<main class="container">
+<div class="brand">VEYRA</div>
+<div class="sub">PRIVATE ADMINISTRATION</div>
+<div class="line"></div>
+
+<section class="panel">
+<h2>ADMIN ACCESS</h2>
+<label for="api">Backend URL</label>
+<input id="api" type="url" value="http://192.168.0.197:8000">
+<label for="key">Admin security key</label>
+<input id="key" type="password" placeholder="Enter your admin key">
+<button class="secondary" onclick="saveKey()">SAVE ADMIN KEY</button>
+<p class="hint">The key is saved in this browser on this device. Do not share it with creators.</p>
+<div class="message" id="keyMessage"></div>
+</section>
+
+<section class="panel">
+<h2>01 / CREATOR INVITATIONS</h2>
+<p class="hint">Generate a unique invitation code for a creator.</p>
+<button id="generate" onclick="generateCode()">GENERATE INVITE CODE</button>
+<div class="result" id="inviteResult">
+<label>YOUR NEW INVITATION CODE</label>
+<div class="code" id="inviteCode"></div>
+<button onclick="copyCode()">COPY INVITE CODE</button>
+</div>
+<div class="message" id="inviteMessage"></div>
+</section>
+
+<section class="panel">
+<h2>02 / PERFORMANCE DATA</h2>
+<p class="hint">Upload your TikTok Backstage Excel (.xlsx) export. All valid creator records are stored, including creators who have not registered yet.</p>
+<label for="file">Backstage Excel file</label>
+<input id="file" type="file" accept=".xlsx">
+<button id="import" onclick="importData()">IMPORT PERFORMANCE DATA</button>
+<div class="status" id="importStatus"></div>
+</section>
+
+<section class="panel">
+<h2>03 / CREATOR MANAGEMENT</h2>
+<p class="hint">Load registered creators. You can change their TikTok username here. Only administrators can make this change.</p>
+<button id="loadCreators" onclick="loadCreators()">LOAD REGISTERED CREATORS</button>
+<div class="status" id="creatorMessage"></div>
+<div class="management-list" id="creatorList"></div>
+</section>
+
+<div class="line"></div>
+<p class="hint">VEYRA CREATOR NETWORK · PRIVATE ADMIN AREA</p>
+</main>
+
+<script>
+let latestCode = "";
+
+const keyField = document.getElementById("key");
+const apiField = document.getElementById("api");
+
+keyField.value = localStorage.getItem("veyra_admin_key") || "";
+apiField.value = localStorage.getItem("veyra_backend_url") || apiField.value;
+
+function saveKey(){
+    const key = keyField.value.trim();
+    if(!key){
+        document.getElementById("keyMessage").textContent = "Enter your admin key first.";
+        return;
+    }
+    localStorage.setItem("veyra_admin_key",key);
+    localStorage.setItem("veyra_backend_url",apiField.value.trim());
+    document.getElementById("keyMessage").textContent = "Admin key saved in this browser.";
+}
+
+function settings(){
+    const api = apiField.value.trim().replace(/\/+$/,"");
+    const key = keyField.value.trim();
+    if(!api || !key) throw new Error("Enter your backend URL and admin security key.");
+    return {api,key};
+}
+
+async function readResponse(response){
+    const raw = await response.text();
+    let data;
+    try{
+        data = JSON.parse(raw);
+    }catch{
+        throw new Error("Server returned an unreadable response: " + raw.slice(0,200));
+    }
+    if(!response.ok){
+        const detail = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail || data);
+        throw new Error(detail || "The request failed.");
+    }
+    return data;
+}
+
+async function generateCode(){
+    const button = document.getElementById("generate");
+    const message = document.getElementById("inviteMessage");
+    const result = document.getElementById("inviteResult");
+
+    button.disabled = true;
+    message.textContent = "";
+    result.style.display = "none";
+
+    try{
+        const {api,key} = settings();
+        const response = await fetch(api + "/admin/invitations",{
+            method:"POST",
+            headers:{"x-admin-key":key}
+        });
+
+        const data = await readResponse(response);
+
+        latestCode = data.code || data.invite_code || data.invitation_code || "";
+        if(!latestCode) throw new Error("The server did not return an invitation code.");
+
+        document.getElementById("inviteCode").textContent = latestCode;
+        result.style.display = "block";
+        message.textContent = "Invite code generated successfully.";
+    }catch(error){
+        message.textContent = "ERROR: " + error.message;
+    }finally{
+        button.disabled = false;
+    }
+}
+
+async function copyCode(){
+    if(!latestCode) return;
+    try{
+        await navigator.clipboard.writeText(latestCode);
+        document.getElementById("inviteMessage").textContent = "Invite code copied.";
+    }catch{
+        document.getElementById("inviteMessage").textContent = "Select the displayed code and copy it manually.";
+    }
+}
+
+async function importData(){
+    const button = document.getElementById("import");
+    const status = document.getElementById("importStatus");
+    const file = document.getElementById("file").files[0];
+
+    if(!file){
+        status.textContent = "Choose a Backstage Excel file first.";
+        return;
+    }
+
+    button.disabled = true;
+    status.textContent = "Importing data...";
+
+    try{
+        const {api,key} = settings();
+        const form = new FormData();
+        form.append("file",file);
+
+        const response = await fetch(api + "/admin/import-backstage",{
+            method:"POST",
+            headers:{"x-admin-key":key},
+            body:form
+        });
+
+        const data = await readResponse(response);
+
+        status.textContent =
+            "IMPORT COMPLETE\n" +
+            "Records stored: " + data.imported + "\n" +
+            "Registered creators matched: " + data.matched_creators + "\n" +
+            "Not yet registered: " + data.unmatched + "\n" +
+            "Invalid rows: " + (data.invalid_rows || []).length +
+            ((data.unmatched_usernames || []).length
+                ? "\n\nCreators not yet registered:\n" + data.unmatched_usernames.join(", ")
+                : "");
+    }catch(error){
+        status.textContent = "ERROR: " + error.message;
+    }finally{
+        button.disabled = false;
+    }
+}
+
+async function loadCreators(){
+    const button = document.getElementById("loadCreators");
+    const message = document.getElementById("creatorMessage");
+    const list = document.getElementById("creatorList");
+
+    button.disabled = true;
+    message.textContent = "Loading registered creators...";
+    list.innerHTML = "";
+
+    try{
+        const {api,key} = settings();
+        const response = await fetch(api + "/admin/users",{
+            method:"GET",
+            headers:{"x-admin-key":key}
+        });
+
+        const data = await readResponse(response);
+        const users = data.users || [];
+
+        if(users.length === 0){
+            message.textContent = "No registered creators yet.";
+            return;
+        }
+
+        message.textContent = users.length + " registered creator(s) found.";
+
+        users.forEach(user => {
+            const card = document.createElement("div");
+            card.className = "creator";
+
+            const details = document.createElement("div");
+            details.className = "creator-details";
+            details.textContent = "ACCOUNT ID: " + user.id + " · EMAIL: " + user.email;
+
+            const currentLabel = document.createElement("div");
+            currentLabel.className = "creator-details";
+            currentLabel.textContent = "CURRENT TIKTOK USERNAME: ";
+
+            const currentUsername = document.createElement("strong");
+            currentUsername.textContent = "@" + user.username;
+            currentLabel.appendChild(currentUsername);
+
+            const inputLabel = document.createElement("label");
+            inputLabel.textContent = "NEW TIKTOK USERNAME";
+
+            const input = document.createElement("input");
+            input.type = "text";
+            input.maxLength = 50;
+            input.value = user.username;
+            input.placeholder = "Enter TikTok username";
+
+            const saveButton = document.createElement("button");
+            saveButton.textContent = "SAVE USERNAME";
+
+            const status = document.createElement("div");
+            status.className = "creator-status";
+
+            saveButton.addEventListener("click", () => {
+                updateCreatorUsername(user.id,input.value,saveButton,status,currentUsername);
+            });
+
+            card.appendChild(details);
+            card.appendChild(currentLabel);
+            card.appendChild(inputLabel);
+            card.appendChild(input);
+            card.appendChild(saveButton);
+            card.appendChild(status);
+            list.appendChild(card);
+        });
+
+    }catch(error){
+        message.textContent = "ERROR: " + error.message;
+    }finally{
+        button.disabled = false;
+    }
+}
+
+async function updateCreatorUsername(userId,newUsername,button,status,currentUsername){
+    const username = newUsername.trim().replace(/^@+/,"");
+
+    if(!/^[A-Za-z0-9._]{1,50}$/.test(username)){
+        status.textContent = "Enter a valid TikTok username.";
+        return;
+    }
+
+    button.disabled = true;
+    status.textContent = "Updating username...";
+
+    try{
+        const {api,key} = settings();
+        const response = await fetch(api + "/admin/users/" + userId + "/username",{
+            method:"PATCH",
+            headers:{
+                "x-admin-key":key,
+                "Content-Type":"application/json"
+            },
+            body:JSON.stringify({username:username})
+        });
+
+        const data = await readResponse(response);
+
+        currentUsername.textContent = "@" + data.user.username;
+
+        if(data.performance_available){
+            status.textContent = "Username updated. Matching Backstage performance data was found.";
+        }else{
+            status.textContent = "Username updated. No matching Backstage record was found yet.";
+        }
+
+    }catch(error){
+        status.textContent = "ERROR: " + error.message;
+    }finally{
+        button.disabled = false;
+    }
+}
+</script>
+</body>
+</html>

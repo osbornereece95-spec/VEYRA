@@ -1,0 +1,56 @@
+﻿# Secrets and environment variables
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.json
+credentials.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Databases and backups
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.bak
+
+# Node and Expo
+node_modules/
+.expo/
+.expo-shared/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Generated builds
+dist/
+build/
+web-build/
+
+# Operating system
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor files
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Private creator uploads and backups
+profile_pictures/
+backend/profile_pictures/
+VEYRA_BACKUP_*/
+
+# SQLite supporting files
+*.db-shm
+*.db-wal

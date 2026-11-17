@@ -1,0 +1,2292 @@
+import React, { useState, useEffect } from 'react';
+import {
+  SafeAreaView,
+  StatusBar,
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  ScrollView,
+  StyleSheet,
+  Alert,
+  ActivityIndicator,
+  Image,
+} from 'react-native';
+import * as SecureStore from 'expo-secure-store';
+import * as ImagePicker from 'expo-image-picker';
+import { File } from 'expo-file-system';
+
+const API_URL = 'http://192.168.0.197:8000';
+
+const C = {
+  black: '#050505',
+  background: '#080808',
+  card: '#101010',
+  cardLight: '#191919',
+  white: '#FFFFFF',
+  grey: '#B8B8B8',
+  muted: '#777777',
+  line: '#303030',
+  accent: '#FFFFFF',
+};
+
+const tabs = [
+  { name: 'Home', symbol: '⌂' },
+  { name: 'Analytics', symbol: '▥' },
+  { name: 'Goals', symbol: '◎' },
+  { name: 'Events', symbol: '✦' },
+  { name: 'Profile', symbol: '◉' },
+];
+
+const MONTHLY_HOUR_TARGET = 15;
+const VALID_DAYS_TARGET = 7;
+
+function SmokeBackground() {
+  return (
+    <View pointerEvents="none" style={styles.smokeLayer}>
+      <View style={styles.smokeCloudOne} />
+      <View style={styles.smokeCloudTwo} />
+      <View style={styles.smokeCloudThree} />
+      <View style={styles.smokeCloudFour} />
+      <View style={styles.smokeCloudFive} />
+      <View style={styles.smokeCloudSix} />
+      <View style={styles.smokeCloudSeven} />
+      <View style={styles.smokeCloudEight} />
+    </View>
+  );
+}
+
+async function apiRequest(path, method = 'GET', body = null, token = null) {
+  const headers = { 'Content-Type': 'application/json' };
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const response = await fetch(`${API_URL}${path}`, {
+    method,
+    headers,
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(data.detail || 'Something went wrong. Please try again.');
+  }
+
+  return data;
+}
+
+function getProfileImageUrl(profilePicture) {
+  if (!profilePicture) return null;
+  if (profilePicture.startsWith('http')) return profilePicture;
+
+  return `${API_URL}/profile-pictures/${encodeURIComponent(profilePicture)}`;
+}
+
+function formatMetric(value) {
+  if (value === null || value === undefined || value === '') return '—';
+
+  const number = Number(value);
+
+  if (!Number.isFinite(number)) return String(value);
+
+  return number.toLocaleString('en-GB', {
+    maximumFractionDigits: 2,
+  });
+}
+
+// Handles alternative backend field names for Fan Club Fans.
+function getFanClubFans(performance) {
+  if (!performance) return null;
+
+  const possibleKeys = [
+    'active_fans_fan_club_l30d',
+    'active_fan_club_fans_l30d',
+    'fan_club_active_fans_l30d',
+    'active_fan_club_fans',
+    'fan_club_fans',
+    'active_fans',
+  ];
+
+  for (const key of possibleKeys) {
+    const value = performance[key];
+
+    if (value !== null && value !== undefined && value !== '') {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+// Handles alternative backend field names for Fan Club Diamonds.
+function getFanClubDiamonds(performance) {
+  if (!performance) return null;
+
+  const possibleKeys = [
+    'fan_club_diamonds_l30d',
+    'fan_club_diamonds',
+    'fanclub_diamonds_l30d',
+    'fan_club_gift_diamonds_l30d',
+    'fan_club_diamonds_last_30_days',
+  ];
+
+  for (const key of possibleKeys) {
+    const value = performance[key];
+
+    if (value !== null && value !== undefined && value !== '') {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function getProgress(value, target) {
+  const number = Number(value);
+
+  if (!Number.isFinite(number) || number < 0 || !target) return 0;
+
+  return Math.min((number / target) * 100, 100);
+}
+
+function Button({ title, onPress, secondary = false, disabled = false }) {
+  return (
+    <TouchableOpacity
+      style={[
+        styles.button,
+        secondary && styles.secondaryButton,
+        disabled && { opacity: 0.5 },
+      ]}
+      onPress={onPress}
+      activeOpacity={0.8}
+      disabled={disabled}
+    >
+      <Text style={[
+        styles.buttonText,
+        secondary && styles.secondaryButtonText,
+      ]}>
+        {title}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+function Field({
+  label,
+  value,
+  onChangeText,
+  placeholder,
+  secureTextEntry,
+  keyboardType,
+}) {
+  return (
+    <View style={styles.field}>
+      <Text style={styles.fieldLabel}>{label}</Text>
+      <TextInput
+        style={styles.input}
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        placeholderTextColor="#777777"
+        secureTextEntry={secureTextEntry}
+        keyboardType={keyboardType || 'default'}
+        autoCapitalize="none"
+      />
+    </View>
+  );
+}
+
+function AuthScreen({ onLogin, onRegister, loading }) {
+  const [screen, setScreen] = useState('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
+  const [username, setUsername] = useState('');
+
+  function submitLogin() {
+    if (!email.trim() || !password) {
+      Alert.alert('Missing details', 'Enter your email and password.');
+      return;
+    }
+
+    onLogin(email.trim(), password);
+  }
+
+  function submitRegister() {
+    if (!email.trim() || !password || !inviteCode.trim() || !username.trim()) {
+      Alert.alert('Missing details', 'Complete all required fields.');
+      return;
+    }
+
+    if (password.length < 12) {
+      Alert.alert('Password too short', 'Use at least 12 characters.');
+      return;
+    }
+
+    onRegister(email.trim(), username.trim(), inviteCode.trim(), password);
+  }
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <StatusBar barStyle="light-content" backgroundColor={C.black} />
+      <SmokeBackground />
+
+      <ScrollView contentContainerStyle={styles.authContainer}>
+        <View style={styles.authBrand}>
+          <Text style={styles.logo}>VEYRA.</Text>
+          <Text style={styles.logoSubtitle}>CREATOR NETWORK</Text>
+        </View>
+
+        <View style={styles.authHeading}>
+          <Text style={styles.authEyebrow}>EXCLUSIVE CREATOR ACCESS</Text>
+          <Text style={styles.authTitle}>
+            {screen === 'login' ? 'Welcome back.' : 'Your next chapter.'}
+          </Text>
+          <Text style={styles.muted}>
+            {screen === 'login'
+              ? 'Sign in to your VEYRA creator space.'
+              : 'Create your invited creator account.'}
+          </Text>
+        </View>
+
+        {screen === 'register' && (
+          <>
+            <Field
+              label="INVITATION CODE"
+              value={inviteCode}
+              onChangeText={setInviteCode}
+              placeholder="Enter your invitation code"
+            />
+            <Field
+              label="TIKTOK USERNAME"
+              value={username}
+              onChangeText={setUsername}
+              placeholder="@yourusername"
+            />
+          </>
+        )}
+
+        <Field
+          label="EMAIL ADDRESS"
+          value={email}
+          onChangeText={setEmail}
+          placeholder="you@example.com"
+          keyboardType="email-address"
+        />
+
+        <Field
+          label="PASSWORD"
+          value={password}
+          onChangeText={setPassword}
+          placeholder={screen === 'register' ? 'At least 12 characters' : 'Your password'}
+          secureTextEntry
+        />
+
+        <Button
+          title={
+            loading
+              ? 'PLEASE WAIT...'
+              : screen === 'login'
+                ? 'SIGN IN'
+                : 'CREATE ACCOUNT'
+          }
+          onPress={screen === 'login' ? submitLogin : submitRegister}
+          disabled={loading}
+        />
+
+        <TouchableOpacity
+          style={styles.switchAuth}
+          onPress={() => setScreen(screen === 'login' ? 'register' : 'login')}
+          disabled={loading}
+        >
+          <Text style={styles.muted}>
+            {screen === 'login' ? "Don't have an account? " : 'Already a member? '}
+            <Text style={styles.whiteText}>
+              {screen === 'login' ? 'Request access' : 'Sign in'}
+            </Text>
+          </Text>
+        </TouchableOpacity>
+
+        <Text style={styles.authFooter}>
+          PRIVATE NETWORK · TIKTOK LIVE CREATORS
+        </Text>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+function Avatar({ profilePicture, displayName, size = 'small' }) {
+  const imageUrl = getProfileImageUrl(profilePicture);
+  const large = size === 'large';
+
+  if (imageUrl) {
+    return (
+      <Image
+        source={{ uri: imageUrl }}
+        style={large ? styles.avatarLarge : styles.avatarSmall}
+      />
+    );
+  }
+
+  const initial = (displayName || 'V').trim().charAt(0).toUpperCase() || 'V';
+
+  return (
+    <View style={large ? styles.avatarLarge : styles.avatarSmall}>
+      <Text style={styles.avatarLetter}>{initial}</Text>
+    </View>
+  );
+}
+
+function Header({ subtitle, user }) {
+  return (
+    <View style={styles.header}>
+      <View>
+        <Text style={styles.logoSmall}>VEYRA.</Text>
+        <Text style={styles.headerSubtitle}>{subtitle}</Text>
+      </View>
+
+      <View style={styles.headerRight}>
+        <View style={styles.onlineDot} />
+        <Avatar
+          profilePicture={user?.profile_picture}
+          displayName={user?.display_name || user?.username}
+        />
+      </View>
+    </View>
+  );
+}
+
+function SectionHeading({ title, action, onAction }) {
+  return (
+    <View style={styles.sectionHeading}>
+      <Text style={styles.sectionTitle}>{title}</Text>
+      {action ? (
+        <TouchableOpacity onPress={onAction}>
+          <Text style={styles.sectionAction}>{action}</Text>
+        </TouchableOpacity>
+      ) : null}
+    </View>
+  );
+}
+
+function MetricCard({ label, value, detail }) {
+  return (
+    <View style={styles.metricCard}>
+      <Text style={styles.metricLabel}>{label}</Text>
+      <Text style={styles.metricValue}>{value}</Text>
+      {detail ? <Text style={styles.metricDetail}>{detail}</Text> : null}
+    </View>
+  );
+}
+
+function ProgressBar({ percentage }) {
+  return (
+    <View style={styles.progressTrack}>
+      <View
+        style={[
+          styles.progressFill,
+          { width: `${percentage}%` },
+        ]}
+      />
+    </View>
+  );
+}
+
+function PerformanceMessage({ loading, error, performance }) {
+  if (loading) {
+    return (
+      <View style={styles.messageCard}>
+        <ActivityIndicator color={C.white} size="small" />
+        <Text style={styles.muted}>Updating your performance...</Text>
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={styles.messageCard}>
+        <Text style={styles.messageTitle}>Performance unavailable</Text>
+        <Text style={styles.muted}>{error}</Text>
+      </View>
+    );
+  }
+
+  if (!performance) {
+    return (
+      <View style={styles.messageCard}>
+        <Text style={styles.messageTitle}>Your stats are on their way</Text>
+        <Text style={styles.muted}>
+          Your Backstage statistics will appear here once your account is
+          matched with an imported report.
+        </Text>
+      </View>
+    );
+  }
+
+  return null;
+}
+
+function TargetCard({ title, value, target, unit, description }) {
+  const progress = getProgress(value, target);
+  const complete =
+    value !== null &&
+    value !== undefined &&
+    Number(value) >= target;
+
+  return (
+    <View style={styles.targetCard}>
+      <View style={styles.targetTop}>
+        <View style={styles.targetIcon}>
+          <Text style={styles.targetIconText}>◎</Text>
+        </View>
+        <Text style={styles.targetLabel}>{title}</Text>
+        <View style={styles.targetStatus}>
+          <Text style={styles.targetStatusText}>
+            {complete ? 'DONE' : 'ACTIVE'}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.targetNumbers}>
+        <Text style={styles.targetNumber}>{formatMetric(value)}</Text>
+        <Text style={styles.targetOf}> / {target} {unit}</Text>
+      </View>
+
+      <ProgressBar percentage={progress} />
+
+      <View style={styles.targetBottom}>
+        <Text style={styles.targetDescription}>{description}</Text>
+        <Text style={styles.targetPercent}>{Math.round(progress)}%</Text>
+      </View>
+    </View>
+  );
+}
+
+function HomeScreen({
+  performance,
+  performanceLoading,
+  performanceError,
+  user,
+  goTo,
+}) {
+  const displayName = user?.display_name || user?.username || 'Creator';
+  const liveHours = performance?.live_duration_l30d;
+
+  return (
+    <ScrollView
+      showsVerticalScrollIndicator={false}
+      contentContainerStyle={styles.screenContent}
+    >
+      <Header subtitle="CREATOR DASHBOARD" user={user} />
+
+      <View style={styles.welcomeRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.eyebrow}>YOUR CREATOR SPACE</Text>
+          <Text style={styles.welcomeTitle}>Welcome back,</Text>
+          <Text style={styles.welcomeName}>{displayName}.</Text>
+        </View>
+        <View style={styles.memberBadge}>
+          <Text style={styles.memberBadgeText}>VEYRA</Text>
+          <Text style={styles.memberBadgeSub}>MEMBER</Text>
+        </View>
+      </View>
+
+      <View style={styles.heroCard}>
+        <View style={styles.heroTop}>
+          <Text style={styles.heroEyebrow}>YOUR LAST 30 DAYS</Text>
+          <View style={styles.livePill}>
+            <View style={styles.livePillDot} />
+            <Text style={styles.livePillText}>PERFORMANCE</Text>
+          </View>
+        </View>
+
+        <Text style={styles.heroLabel}>Total diamonds</Text>
+        <Text style={styles.heroNumber}>
+          {formatMetric(performance?.diamonds_l30d)}
+        </Text>
+
+        <View style={styles.heroDivider} />
+
+        <View style={styles.heroFooter}>
+          <View>
+            <Text style={styles.heroFooterLabel}>LIVE DURATION</Text>
+            <Text style={styles.heroFooterValue}>
+              {formatMetric(liveHours)} hours
+            </Text>
+          </View>
+          <View style={styles.heroArrow}>
+            <Text style={styles.heroArrowText}>↗</Text>
+          </View>
+        </View>
+      </View>
+
+      <PerformanceMessage
+        loading={performanceLoading}
+        error={performanceError}
+        performance={performance}
+      />
+
+      <SectionHeading
+        title="PERFORMANCE OVERVIEW"
+        action="VIEW ALL"
+        onAction={() => goTo('Analytics')}
+      />
+
+      <View style={styles.metricsGrid}>
+        <MetricCard
+          label="FOLLOWERS"
+          value={formatMetric(performance?.followers)}
+          detail="Total audience"
+        />
+        <MetricCard
+          label="LIKES"
+          value={formatMetric(performance?.likes)}
+          detail="Total likes"
+        />
+        <MetricCard
+          label="VALID LIVE DAYS"
+          value={formatMetric(performance?.valid_live_days_l30d)}
+          detail="Last 30 days"
+        />
+        <MetricCard
+          label="LIVE HOURS"
+          value={formatMetric(liveHours)}
+          detail="Last 30 days"
+        />
+        <MetricCard
+          label="ACTIVE FAN CLUB FANS"
+          value={formatMetric(getFanClubFans(performance))}
+          detail="Last 30 days"
+        />
+      </View>
+
+      <SectionHeading title="CREATOR STATUS" />
+      <View style={styles.infoCard}>
+        <View style={styles.comingSoonRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.infoTitle}>Current tier</Text>
+            <Text style={styles.readOnlyValue}>
+              {performance?.tier_status || '—'}
+            </Text>
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.infoTitle}>Previous tier</Text>
+            <Text style={styles.readOnlyValue}>
+              {performance?.tier_last_month || '—'}
+            </Text>
+          </View>
+        </View>
+        <View style={styles.heroDivider} />
+        <Text style={styles.infoTitle}>Star Creator achievement</Text>
+        <Text style={styles.readOnlyValue}>
+          {performance?.achieved_star_creator ? 'Achieved' : 'Not achieved / no data'}
+        </Text>
+        <Text style={styles.muted}>
+          {formatMetric(performance?.star_creator_days_this_month)} Star Creator days this month
+        </Text>
+      </View>
+
+      <SectionHeading
+        title="YOUR MONTHLY GOALS"
+        action="VIEW GOALS"
+        onAction={() => goTo('Goals')}
+      />
+
+      <TargetCard
+        title="LIVE HOURS"
+        value={liveHours}
+        target={MONTHLY_HOUR_TARGET}
+        unit="hours"
+        description="Monthly LIVE target"
+      />
+
+      <TargetCard
+        title="VALID LIVE DAYS"
+        value={performance?.valid_live_days_l30d}
+        target={VALID_DAYS_TARGET}
+        unit="days"
+        description="Monthly consistency target"
+      />
+
+      <SectionHeading title="YOUR VEYRA NETWORK" />
+
+      <TouchableOpacity
+        style={styles.networkCard}
+        onPress={() => goTo('Events')}
+        activeOpacity={0.85}
+      >
+        <View style={styles.networkIcon}>
+          <Text style={styles.networkIconText}>✦</Text>
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.networkTitle}>Opportunities await.</Text>
+          <Text style={styles.networkDescription}>
+            Explore creator events, campaigns and announcements.
+          </Text>
+        </View>
+        <Text style={styles.networkArrow}>›</Text>
+      </TouchableOpacity>
+
+      <View style={styles.bottomSpace} />
+    </ScrollView>
+  );
+}
+
+function AnalyticsScreen({
+  performance,
+  performanceLoading,
+  performanceError,
+  user,
+}) {
+  return (
+    <ScrollView
+      showsVerticalScrollIndicator={false}
+      contentContainerStyle={styles.screenContent}
+    >
+      <Header subtitle="YOUR PERFORMANCE" user={user} />
+
+      <Text style={styles.eyebrow}>DATA & INSIGHTS</Text>
+      <Text style={styles.pageTitle}>Analytics</Text>
+      <Text style={styles.pageSubtitle}>
+        Understand your growth and LIVE performance.
+      </Text>
+
+      <PerformanceMessage
+        loading={performanceLoading}
+        error={performanceError}
+        performance={performance}
+      />
+
+      <View style={styles.analyticsHero}>
+        <Text style={styles.heroEyebrow}>DIAMONDS · LAST 30 DAYS</Text>
+        <Text style={styles.analyticsHeroNumber}>
+          {formatMetric(performance?.diamonds_l30d)}
+        </Text>
+        <Text style={styles.analyticsHeroCaption}>
+          Your latest reported diamond total
+        </Text>
+      </View>
+
+      <SectionHeading title="YOUR STATISTICS" />
+
+      <View style={styles.metricsGrid}>
+        <MetricCard
+          label="FOLLOWERS"
+          value={formatMetric(performance?.followers)}
+          detail="Audience"
+        />
+        <MetricCard
+          label="LIKES"
+          value={formatMetric(performance?.likes)}
+          detail="Engagement"
+        />
+        <MetricCard
+          label="LIVE DURATION"
+          value={formatMetric(performance?.live_duration_l30d)}
+          detail="Last 30 days"
+        />
+        <MetricCard
+          label="VALID LIVE DAYS"
+          value={formatMetric(performance?.valid_live_days_l30d)}
+          detail="Last 30 days"
+        />
+        <MetricCard
+          label="VIDEOS"
+          value={formatMetric(performance?.videos)}
+          detail="Total published"
+        />
+        <MetricCard
+          label="FAN CLUB DIAMONDS"
+          value={formatMetric(getFanClubDiamonds(performance))}
+          detail="Last 30 days"
+        />
+        <MetricCard
+          label="ACTIVE FAN CLUB FANS"
+          value={formatMetric(getFanClubFans(performance))}
+          detail="Last 30 days"
+        />
+      </View>
+
+      <SectionHeading title="CREATOR STATUS" />
+      <View style={styles.infoCard}>
+        <View style={styles.comingSoonRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.infoTitle}>Current tier</Text>
+            <Text style={styles.readOnlyValue}>
+              {performance?.tier_status || '—'}
+            </Text>
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.infoTitle}>Previous tier</Text>
+            <Text style={styles.readOnlyValue}>
+              {performance?.tier_last_month || '—'}
+            </Text>
+          </View>
+        </View>
+        <View style={styles.heroDivider} />
+        <Text style={styles.infoTitle}>Star Creator achievement</Text>
+        <Text style={styles.readOnlyValue}>
+          {performance?.achieved_star_creator ? 'Achieved' : 'Not achieved / no data'}
+        </Text>
+        <Text style={styles.muted}>
+          {formatMetric(performance?.star_creator_days_this_month)} Star Creator days this month
+        </Text>
+      </View>
+
+      <SectionHeading title="REPORTING PERIOD" />
+
+      <View style={styles.infoCard}>
+        <Text style={styles.infoTitle}>Last 30 days</Text>
+        <Text style={styles.muted}>
+          These figures are supplied from your latest imported TikTok
+          Backstage report.
+        </Text>
+      </View>
+
+      <View style={styles.infoCard}>
+        <Text style={styles.infoTitle}>Performance history</Text>
+        <Text style={styles.muted}>
+          Historical charts and period comparisons can be added once
+          historical report data is available.
+        </Text>
+      </View>
+
+      <View style={styles.bottomSpace} />
+    </ScrollView>
+  );
+}
+
+function GoalsScreen({
+  performance,
+  performanceLoading,
+  performanceError,
+  user,
+}) {
+  return (
+    <ScrollView
+      showsVerticalScrollIndicator={false}
+      contentContainerStyle={styles.screenContent}
+    >
+      <Header subtitle="YOUR AMBITIONS" user={user} />
+
+      <Text style={styles.eyebrow}>PLAN YOUR PROGRESS</Text>
+      <Text style={styles.pageTitle}>Goals</Text>
+      <Text style={styles.pageSubtitle}>
+        Consistency creates momentum. Track your targets here.
+      </Text>
+
+      <PerformanceMessage
+        loading={performanceLoading}
+        error={performanceError}
+        performance={performance}
+      />
+
+      <View style={styles.goalSummary}>
+        <Text style={styles.heroEyebrow}>YOUR MONTHLY FOCUS</Text>
+        <Text style={styles.goalSummaryTitle}>Show up. Stay consistent.</Text>
+        <Text style={styles.goalSummaryText}>
+          Your targets are measured against your latest 30-day report.
+        </Text>
+      </View>
+
+      <SectionHeading title="YOUR LIVE TARGETS" />
+
+      <TargetCard
+        title="LIVE HOURS"
+        value={performance?.live_duration_l30d}
+        target={MONTHLY_HOUR_TARGET}
+        unit="hours"
+        description="15 hours in the last 30 days"
+      />
+
+      <TargetCard
+        title="VALID LIVE DAYS"
+        value={performance?.valid_live_days_l30d}
+        target={VALID_DAYS_TARGET}
+        unit="days"
+        description="7 valid days in the last 30 days"
+      />
+
+      <View style={styles.infoCard}>
+        <Text style={styles.infoTitle}>Keep building your consistency.</Text>
+        <Text style={styles.muted}>
+          Your progress updates when a new Backstage report is imported
+          and matched to your account.
+        </Text>
+      </View>
+
+      <View style={styles.bottomSpace} />
+    </ScrollView>
+  );
+}
+
+function EventsScreen({ user }) {
+  return (
+    <ScrollView
+      showsVerticalScrollIndicator={false}
+      contentContainerStyle={styles.screenContent}
+    >
+      <Header subtitle="WHAT'S HAPPENING" user={user} />
+
+      <Text style={styles.eyebrow}>INSIDE THE NETWORK</Text>
+      <Text style={styles.pageTitle}>Events</Text>
+      <Text style={styles.pageSubtitle}>
+        Discover opportunities and updates from VEYRA.
+      </Text>
+
+      <View style={styles.eventFeature}>
+        <Text style={styles.eventFeatureEyebrow}>VEYRA CREATOR NETWORK</Text>
+        <Text style={styles.eventFeatureTitle}>Your next opportunity starts here.</Text>
+        <Text style={styles.eventFeatureText}>
+          Keep an eye on this space for creator campaigns, LIVE challenges,
+          competitions and network announcements.
+        </Text>
+        <View style={styles.eventFeatureMark}>
+          <Text style={styles.eventFeatureMarkText}>V.</Text>
+        </View>
+      </View>
+
+      <SectionHeading title="YOUR OPPORTUNITIES" />
+
+      <View style={styles.infoCard}>
+        <View style={styles.comingSoonRow}>
+          <Text style={styles.infoTitle}>Campaigns</Text>
+          <Text style={styles.comingSoon}>COMING SOON</Text>
+        </View>
+        <Text style={styles.muted}>
+          Creator campaigns and network opportunities will appear here.
+        </Text>
+      </View>
+
+      <View style={styles.infoCard}>
+        <View style={styles.comingSoonRow}>
+          <Text style={styles.infoTitle}>LIVE challenges</Text>
+          <Text style={styles.comingSoon}>COMING SOON</Text>
+        </View>
+        <Text style={styles.muted}>
+          Take part in challenges and creator competitions.
+        </Text>
+      </View>
+
+      <View style={styles.infoCard}>
+        <View style={styles.comingSoonRow}>
+          <Text style={styles.infoTitle}>Announcements</Text>
+          <Text style={styles.comingSoon}>COMING SOON</Text>
+        </View>
+        <Text style={styles.muted}>
+          Important news and updates from your network.
+        </Text>
+      </View>
+
+      <View style={styles.bottomSpace} />
+    </ScrollView>
+  );
+}
+
+function ProfileScreen({
+  email,
+  username,
+  displayName,
+  profilePicture,
+  onSave,
+  onUploadPicture,
+  onLogout,
+}) {
+  const [newDisplayName, setNewDisplayName] = useState(
+    displayName || username || ''
+  );
+  const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+
+  useEffect(() => {
+    setNewDisplayName(displayName || username || '');
+  }, [displayName, username]);
+
+  async function choosePicture() {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+    if (!permission.granted) {
+      Alert.alert(
+        'Permission needed',
+        'Please allow VEYRA to access your photo library.'
+      );
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+
+    if (result.canceled || !result.assets?.length) return;
+
+    setUploading(true);
+
+    try {
+      await onUploadPicture(result.assets[0]);
+      Alert.alert('Profile picture updated', 'Your new picture has been saved.');
+    } catch (error) {
+      Alert.alert('Upload failed', error.message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function saveProfile() {
+    const trimmedDisplayName = newDisplayName.trim();
+
+    if (!trimmedDisplayName) {
+      Alert.alert('Missing display name', 'Please enter a display name.');
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      await onSave(trimmedDisplayName);
+      Alert.alert('Profile updated', 'Your display name has been saved.');
+    } catch (error) {
+      Alert.alert('Update failed', error.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <ScrollView
+      showsVerticalScrollIndicator={false}
+      contentContainerStyle={styles.screenContent}
+    >
+      <Header
+        subtitle="YOUR ACCOUNT"
+        user={{
+          username,
+          display_name: displayName,
+          profile_picture: profilePicture,
+        }}
+      />
+
+      <Text style={styles.eyebrow}>ACCOUNT SETTINGS</Text>
+      <Text style={styles.pageTitle}>Profile</Text>
+      <Text style={styles.pageSubtitle}>
+        Manage your VEYRA creator profile.
+      </Text>
+
+      <View style={styles.profileCard}>
+        <Avatar
+          profilePicture={profilePicture}
+          displayName={displayName || username}
+          size="large"
+        />
+
+        <Text style={styles.profileName}>
+          {displayName || username || 'VEYRA Creator'}
+        </Text>
+
+        <Text style={styles.profileEmail}>{email}</Text>
+
+        <TouchableOpacity
+          style={styles.photoButton}
+          onPress={choosePicture}
+          disabled={uploading}
+        >
+          <Text style={styles.photoButtonText}>
+            {uploading ? 'UPLOADING...' : 'CHANGE PROFILE PICTURE'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      <SectionHeading title="PERSONAL DETAILS" />
+
+      <View style={styles.infoCard}>
+        <Field
+          label="DISPLAY NAME"
+          value={newDisplayName}
+          onChangeText={setNewDisplayName}
+          placeholder="Your display name"
+        />
+
+        <View style={styles.readOnlyField}>
+          <Text style={styles.fieldLabel}>TIKTOK USERNAME</Text>
+          <Text style={styles.readOnlyValue}>
+            {username ? `@${username.replace(/^@/, '')}` : 'Not set'}
+          </Text>
+          <Text style={styles.readOnlyHint}>
+            Your TikTok username is managed by VEYRA administration.
+          </Text>
+        </View>
+
+        <Button
+          title={saving ? 'SAVING...' : 'SAVE DISPLAY NAME'}
+          onPress={saveProfile}
+          disabled={saving}
+        />
+      </View>
+
+      <SectionHeading title="ACCOUNT INFORMATION" />
+
+      <View style={styles.infoCard}>
+        <Text style={styles.fieldLabel}>EMAIL ADDRESS</Text>
+        <Text style={styles.readOnlyValue}>{email}</Text>
+      </View>
+
+      <Button title="SIGN OUT" secondary onPress={onLogout} />
+
+      <Text style={styles.authFooter}>
+        VEYRA CREATOR NETWORK · VERSION 1.1
+      </Text>
+
+      <View style={styles.bottomSpace} />
+    </ScrollView>
+  );
+}
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [activeTab, setActiveTab] = useState('Home');
+  const [loading, setLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(false);
+
+  const [performance, setPerformance] = useState(null);
+  const [performanceLoading, setPerformanceLoading] = useState(false);
+  const [performanceError, setPerformanceError] = useState('');
+
+  useEffect(() => {
+    async function restoreSession() {
+      try {
+        const token = await SecureStore.getItemAsync('veyra_token');
+
+        if (token) {
+          const profile = await apiRequest('/me', 'GET', null, token);
+          setUser(profile);
+        }
+      } catch (error) {
+        await SecureStore.deleteItemAsync('veyra_token');
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    restoreSession();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadPerformance() {
+      if (!user) {
+        setPerformance(null);
+        setPerformanceError('');
+        setPerformanceLoading(false);
+        return;
+      }
+
+      setPerformanceLoading(true);
+      setPerformanceError('');
+
+      try {
+        const token = await SecureStore.getItemAsync('veyra_token');
+
+        if (!token) {
+          throw new Error('Please sign in again to load your performance.');
+        }
+
+        const result = await apiRequest('/my-performance', 'GET', null, token);
+
+        if (!cancelled) {
+          setPerformance(result.performance || null);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setPerformance(null);
+          setPerformanceError(error.message);
+        }
+      } finally {
+        if (!cancelled) {
+          setPerformanceLoading(false);
+        }
+      }
+    }
+
+    loadPerformance();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
+  async function handleLogin(email, password) {
+    setAuthLoading(true);
+
+    try {
+      const result = await apiRequest('/auth/login', 'POST', {
+        email,
+        password,
+      });
+
+      await SecureStore.setItemAsync('veyra_token', result.access_token);
+
+      const profile = await apiRequest(
+        '/me',
+        'GET',
+        null,
+        result.access_token
+      );
+
+      setUser(profile);
+      setActiveTab('Home');
+    } catch (error) {
+      Alert.alert('Sign in failed', error.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function handleRegister(email, username, invitationCode, password) {
+    setAuthLoading(true);
+
+    try {
+      const result = await apiRequest('/auth/register', 'POST', {
+        email,
+        username,
+        invitation_code: invitationCode,
+        password,
+      });
+
+      await SecureStore.setItemAsync('veyra_token', result.access_token);
+
+      const profile = await apiRequest(
+        '/me',
+        'GET',
+        null,
+        result.access_token
+      );
+
+      setUser(profile);
+      setActiveTab('Home');
+    } catch (error) {
+      Alert.alert('Registration failed', error.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function handleSaveProfile(displayName) {
+    const token = await SecureStore.getItemAsync('veyra_token');
+
+    if (!token) {
+      throw new Error('Your session has expired. Please sign in again.');
+    }
+
+    const result = await apiRequest(
+      '/me',
+      'PATCH',
+      { display_name: displayName },
+      token
+    );
+
+    const updatedProfile = result.user || result;
+    setUser(updatedProfile);
+  }
+
+  async function handleUploadPicture(asset) {
+    const token = await SecureStore.getItemAsync('veyra_token');
+
+    if (!token) {
+      throw new Error('Your session has expired. Please sign in again.');
+    }
+
+    const extension = asset.mimeType?.includes('png')
+      ? 'png'
+      : asset.mimeType?.includes('webp')
+        ? 'webp'
+        : 'jpg';
+
+    const imageFile = new File(asset.uri);
+    const formData = new FormData();
+
+    formData.append('file', imageFile, `profile.${extension}`);
+
+    const response = await fetch(`${API_URL}/me/profile-picture`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: formData,
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(data.detail || 'Unable to upload your profile picture.');
+    }
+
+    const updatedProfile = await apiRequest('/me', 'GET', null, token);
+    setUser(updatedProfile);
+  }
+
+  async function handleLogout() {
+    await SecureStore.deleteItemAsync('veyra_token');
+    setUser(null);
+    setPerformance(null);
+    setPerformanceError('');
+    setActiveTab('Home');
+  }
+
+  function goTo(tab) {
+    setActiveTab(tab);
+  }
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <StatusBar barStyle="light-content" backgroundColor={C.black} />
+        <SmokeBackground />
+        <View style={styles.loadingScreen}>
+          <Text style={styles.logo}>VEYRA.</Text>
+          <ActivityIndicator color={C.white} size="large" />
+          <Text style={styles.muted}>Loading your creator space...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (!user) {
+    return (
+      <AuthScreen
+        onLogin={handleLogin}
+        onRegister={handleRegister}
+        loading={authLoading}
+      />
+    );
+  }
+
+  const screens = {
+    Home: (
+      <HomeScreen
+        performance={performance}
+        performanceLoading={performanceLoading}
+        performanceError={performanceError}
+        user={user}
+        goTo={goTo}
+      />
+    ),
+
+    Analytics: (
+      <AnalyticsScreen
+        performance={performance}
+        performanceLoading={performanceLoading}
+        performanceError={performanceError}
+        user={user}
+      />
+    ),
+
+    Goals: (
+      <GoalsScreen
+        performance={performance}
+        performanceLoading={performanceLoading}
+        performanceError={performanceError}
+        user={user}
+      />
+    ),
+
+    Events: <EventsScreen user={user} />,
+
+    Profile: (
+      <ProfileScreen
+        email={user.email}
+        username={user.username}
+        displayName={user.display_name}
+        profilePicture={user.profile_picture}
+        onSave={handleSaveProfile}
+        onUploadPicture={handleUploadPicture}
+        onLogout={handleLogout}
+      />
+    ),
+  };
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <StatusBar barStyle="light-content" backgroundColor={C.black} />
+
+      <View style={styles.app}>
+        <SmokeBackground />
+
+        <View style={styles.content}>
+          {screens[activeTab]}
+        </View>
+
+        <View style={styles.bottomNav}>
+          {tabs.map((tab) => {
+            const selected = activeTab === tab.name;
+
+            return (
+              <TouchableOpacity
+                key={tab.name}
+                style={styles.navItem}
+                onPress={() => setActiveTab(tab.name)}
+                activeOpacity={0.75}
+              >
+                <Text style={[
+                  styles.navSymbol,
+                  selected && styles.navSymbolActive,
+                ]}>
+                  {tab.symbol}
+                </Text>
+
+                <Text style={[
+                  styles.navLabel,
+                  selected && styles.navLabelActive,
+                ]}>
+                  {tab.name}
+                </Text>
+
+                {selected && <View style={styles.navIndicator} />}
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: {
+    flex: 1,
+    backgroundColor: C.black,
+  },
+
+  smokeLayer: {
+    ...StyleSheet.absoluteFillObject,
+    overflow: 'hidden',
+    backgroundColor: 'transparent',
+    zIndex: 0,
+  },
+
+  smokeCloudOne: {
+    position: 'absolute',
+    width: 360,
+    height: 190,
+    top: 65,
+    left: -130,
+    borderRadius: 200,
+    backgroundColor: '#E5E5E5',
+    opacity: 0.15,
+    transform: [{ rotate: '-24deg' }],
+  },
+
+  smokeCloudTwo: {
+    position: 'absolute',
+    width: 330,
+    height: 170,
+    top: 145,
+    right: -125,
+    borderRadius: 200,
+    backgroundColor: '#FFFFFF',
+    opacity: 0.13,
+    transform: [{ rotate: '28deg' }],
+  },
+
+  smokeCloudThree: {
+    position: 'absolute',
+    width: 390,
+    height: 200,
+    top: 340,
+    left: -145,
+    borderRadius: 200,
+    backgroundColor: '#CFCFCF',
+    opacity: 0.14,
+    transform: [{ rotate: '18deg' }],
+  },
+
+  smokeCloudFour: {
+    position: 'absolute',
+    width: 350,
+    height: 180,
+    top: 455,
+    right: -135,
+    borderRadius: 200,
+    backgroundColor: '#EEEEEE',
+    opacity: 0.12,
+    transform: [{ rotate: '-25deg' }],
+  },
+
+  smokeCloudFive: {
+    position: 'absolute',
+    width: 390,
+    height: 190,
+    bottom: 100,
+    left: -145,
+    borderRadius: 200,
+    backgroundColor: '#D0D0D0',
+    opacity: 0.14,
+    transform: [{ rotate: '-15deg' }],
+  },
+
+  smokeCloudSix: {
+    position: 'absolute',
+    width: 340,
+    height: 170,
+    bottom: 200,
+    right: -125,
+    borderRadius: 200,
+    backgroundColor: '#FFFFFF',
+    opacity: 0.12,
+    transform: [{ rotate: '22deg' }],
+  },
+
+  smokeCloudSeven: {
+    position: 'absolute',
+    width: 280,
+    height: 150,
+    top: 650,
+    left: 45,
+    borderRadius: 200,
+    backgroundColor: '#AAAAAA',
+    opacity: 0.12,
+    transform: [{ rotate: '12deg' }],
+  },
+
+  smokeCloudEight: {
+    position: 'absolute',
+    width: 300,
+    height: 160,
+    top: 850,
+    right: -20,
+    borderRadius: 200,
+    backgroundColor: '#DADADA',
+    opacity: 0.11,
+    transform: [{ rotate: '-18deg' }],
+  },
+
+  app: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+
+  content: {
+    flex: 1,
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    zIndex: 1,
+  },
+
+  screenContent: {
+    paddingBottom: 20,
+  },
+
+  loadingScreen: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 20,
+    backgroundColor: 'transparent',
+  },
+
+  authContainer: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 27,
+    paddingVertical: 40,
+    backgroundColor: 'transparent',
+  },
+
+  authBrand: {
+    marginBottom: 55,
+  },
+
+  logo: {
+    color: C.white,
+    fontSize: 37,
+    fontWeight: '900',
+    letterSpacing: 6,
+  },
+
+  logoDot: {
+    color: C.white,
+  },
+
+  logoSubtitle: {
+    color: C.grey,
+    fontSize: 9,
+    letterSpacing: 3,
+    marginTop: 6,
+  },
+
+  authHeading: {
+    marginBottom: 30,
+  },
+
+  authEyebrow: {
+    color: C.white,
+    fontSize: 9,
+    letterSpacing: 2,
+    marginBottom: 13,
+    fontWeight: '800',
+  },
+
+  authTitle: {
+    color: C.white,
+    fontSize: 34,
+    fontWeight: '900',
+    marginBottom: 9,
+  },
+
+  muted: {
+    color: C.grey,
+    fontSize: 12,
+    lineHeight: 19,
+  },
+
+  field: {
+    marginBottom: 19,
+  },
+
+  fieldLabel: {
+    color: C.grey,
+    fontSize: 9,
+    letterSpacing: 1.5,
+    marginBottom: 9,
+    fontWeight: '700',
+  },
+
+  input: {
+    height: 52,
+    backgroundColor: C.card,
+    borderColor: C.line,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    color: C.white,
+    fontSize: 13,
+  },
+
+  button: {
+    backgroundColor: C.white,
+    minHeight: 51,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+
+  buttonText: {
+    color: C.black,
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1.5,
+  },
+
+  secondaryButton: {
+    backgroundColor: C.card,
+    borderWidth: 1,
+    borderColor: C.line,
+  },
+
+  secondaryButtonText: {
+    color: C.white,
+  },
+
+  switchAuth: {
+    alignItems: 'center',
+    marginTop: 24,
+  },
+
+  whiteText: {
+    color: C.white,
+    fontWeight: '800',
+  },
+
+  authFooter: {
+    color: '#777777',
+    fontSize: 8,
+    letterSpacing: 1.5,
+    textAlign: 'center',
+    marginTop: 35,
+  },
+
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingBottom: 27,
+  },
+
+  logoSmall: {
+    color: C.white,
+    fontSize: 22,
+    fontWeight: '900',
+    letterSpacing: 4,
+  },
+
+  headerSubtitle: {
+    color: C.grey,
+    fontSize: 8,
+    letterSpacing: 2,
+    marginTop: 5,
+  },
+
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+
+  onlineDot: {
+    height: 7,
+    width: 7,
+    borderRadius: 4,
+    backgroundColor: C.white,
+  },
+
+  avatarSmall: {
+    width: 37,
+    height: 37,
+    borderRadius: 19,
+    backgroundColor: C.cardLight,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: C.line,
+  },
+
+  avatarLetter: {
+    color: C.white,
+    fontWeight: '800',
+    fontSize: 17,
+  },
+
+  eyebrow: {
+    color: C.white,
+    fontSize: 9,
+    letterSpacing: 2,
+    marginBottom: 9,
+    fontWeight: '800',
+  },
+
+  welcomeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+
+  welcomeTitle: {
+    color: C.white,
+    fontSize: 25,
+    fontWeight: '800',
+  },
+
+  welcomeName: {
+    color: C.grey,
+    fontSize: 23,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+
+  memberBadge: {
+    borderWidth: 1,
+    borderColor: '#4C4C4C',
+    borderRadius: 9,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    alignItems: 'center',
+    backgroundColor: C.card,
+  },
+
+  memberBadgeText: {
+    color: C.white,
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 2,
+  },
+
+  memberBadgeSub: {
+    color: C.grey,
+    fontSize: 7,
+    letterSpacing: 1.5,
+    marginTop: 3,
+  },
+
+  heroCard: {
+    backgroundColor: '#090909',
+    borderRadius: 16,
+    padding: 19,
+    borderWidth: 1,
+    borderColor: '#383838',
+    marginBottom: 13,
+  },
+
+  heroTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+
+  heroEyebrow: {
+    color: C.grey,
+    fontSize: 9,
+    letterSpacing: 1.6,
+    fontWeight: '800',
+  },
+
+  livePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#202020',
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    borderRadius: 20,
+    gap: 6,
+  },
+
+  livePillDot: {
+    height: 6,
+    width: 6,
+    borderRadius: 3,
+    backgroundColor: C.white,
+  },
+
+  livePillText: {
+    color: C.white,
+    fontSize: 7,
+    letterSpacing: 1,
+    fontWeight: '800',
+  },
+
+  heroLabel: {
+    color: C.grey,
+    fontSize: 12,
+    marginTop: 23,
+  },
+
+  heroNumber: {
+    color: C.white,
+    fontSize: 39,
+    fontWeight: '900',
+    marginTop: 4,
+  },
+
+  heroDivider: {
+    height: 1,
+    backgroundColor: '#3A3A3A',
+    marginVertical: 17,
+  },
+
+  heroFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+
+  heroFooterLabel: {
+    color: C.grey,
+    fontSize: 8,
+    letterSpacing: 1.4,
+    fontWeight: '800',
+  },
+
+  heroFooterValue: {
+    color: C.white,
+    fontSize: 16,
+    fontWeight: '800',
+    marginTop: 6,
+  },
+
+  heroArrow: {
+    width: 34,
+    height: 34,
+    borderRadius: 18,
+    backgroundColor: C.white,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  heroArrowText: {
+    color: C.black,
+    fontSize: 20,
+    fontWeight: '900',
+  },
+
+  sectionHeading: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 26,
+    marginBottom: 13,
+  },
+
+  sectionTitle: {
+    color: C.white,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 1.5,
+  },
+
+  sectionAction: {
+    color: C.white,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+
+  metricsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+  },
+
+  metricCard: {
+    width: '48.3%',
+    backgroundColor: '#090909',
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 10,
+    minHeight: 105,
+  },
+
+  metricLabel: {
+    color: C.grey,
+    fontSize: 8,
+    letterSpacing: 1.1,
+    fontWeight: '800',
+  },
+
+  metricValue: {
+    color: C.white,
+    fontSize: 23,
+    fontWeight: '900',
+    marginTop: 13,
+  },
+
+  metricDetail: {
+    color: C.muted,
+    fontSize: 9,
+    marginTop: 4,
+  },
+
+  targetCard: {
+    backgroundColor: '#090909',
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: C.line,
+    padding: 16,
+    marginBottom: 11,
+  },
+
+  targetTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+
+  targetIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: '#222222',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 9,
+  },
+
+  targetIconText: {
+    color: C.white,
+    fontSize: 18,
+    fontWeight: '900',
+  },
+
+  targetLabel: {
+    color: C.white,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 1,
+    flex: 1,
+  },
+
+  targetStatus: {
+    backgroundColor: '#222222',
+    borderRadius: 5,
+    paddingHorizontal: 7,
+    paddingVertical: 5,
+  },
+
+  targetStatusText: {
+    color: C.white,
+    fontSize: 7,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+
+  targetNumbers: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    marginTop: 17,
+  },
+
+  targetNumber: {
+    color: C.white,
+    fontSize: 26,
+    fontWeight: '900',
+  },
+
+  targetOf: {
+    color: C.grey,
+    fontSize: 11,
+  },
+
+  progressTrack: {
+    height: 6,
+    backgroundColor: '#373737',
+    borderRadius: 5,
+    marginVertical: 12,
+    overflow: 'hidden',
+  },
+
+  progressFill: {
+    height: '100%',
+    backgroundColor: C.white,
+    borderRadius: 5,
+  },
+
+  targetBottom: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+
+  targetDescription: {
+    color: C.grey,
+    fontSize: 9,
+  },
+
+  targetPercent: {
+    color: C.white,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+
+  networkCard: {
+    backgroundColor: '#090909',
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: '#383838',
+    padding: 15,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+
+  networkIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: '#222222',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  networkIconText: {
+    color: C.white,
+    fontSize: 20,
+  },
+
+  networkTitle: {
+    color: C.white,
+    fontSize: 12,
+    fontWeight: '800',
+    marginBottom: 5,
+  },
+
+  networkDescription: {
+    color: C.grey,
+    fontSize: 9,
+    lineHeight: 15,
+  },
+
+  networkArrow: {
+    color: C.white,
+    fontSize: 25,
+  },
+
+  messageCard: {
+    backgroundColor: '#090909',
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 11,
+    padding: 15,
+    marginTop: 8,
+    gap: 8,
+  },
+
+  messageTitle: {
+    color: C.white,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+
+  pageTitle: {
+    color: C.white,
+    fontSize: 32,
+    fontWeight: '900',
+    marginBottom: 7,
+  },
+
+  pageSubtitle: {
+    color: C.grey,
+    fontSize: 12,
+    lineHeight: 19,
+    marginBottom: 13,
+  },
+
+  analyticsHero: {
+    backgroundColor: '#090909',
+    borderWidth: 1,
+    borderColor: '#383838',
+    borderRadius: 15,
+    padding: 19,
+    marginTop: 15,
+  },
+
+  analyticsHeroNumber: {
+    color: C.white,
+    fontSize: 36,
+    fontWeight: '900',
+    marginTop: 15,
+  },
+
+  analyticsHeroCaption: {
+    color: C.grey,
+    fontSize: 10,
+    marginTop: 5,
+  },
+
+  infoCard: {
+    backgroundColor: '#090909',
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 11,
+  },
+
+  infoTitle: {
+    color: C.white,
+    fontSize: 12,
+    fontWeight: '800',
+    marginBottom: 7,
+  },
+
+  goalSummary: {
+    backgroundColor: '#090909',
+    borderWidth: 1,
+    borderColor: '#383838',
+    borderRadius: 14,
+    padding: 19,
+    marginTop: 10,
+  },
+
+  goalSummaryTitle: {
+    color: C.white,
+    fontSize: 20,
+    fontWeight: '900',
+    marginTop: 14,
+    marginBottom: 7,
+  },
+
+  goalSummaryText: {
+    color: C.grey,
+    fontSize: 11,
+    lineHeight: 18,
+  },
+
+  eventFeature: {
+    backgroundColor: '#090909',
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: '#383838',
+    padding: 20,
+    minHeight: 195,
+    overflow: 'hidden',
+    marginTop: 10,
+  },
+
+  eventFeatureEyebrow: {
+    color: C.white,
+    fontSize: 8,
+    letterSpacing: 1.8,
+    fontWeight: '900',
+  },
+
+  eventFeatureTitle: {
+    color: C.white,
+    fontSize: 23,
+    fontWeight: '900',
+    lineHeight: 29,
+    marginTop: 17,
+    maxWidth: '85%',
+  },
+
+  eventFeatureText: {
+    color: C.grey,
+    fontSize: 10,
+    lineHeight: 17,
+    marginTop: 10,
+    maxWidth: '90%',
+  },
+
+  eventFeatureMark: {
+    position: 'absolute',
+    right: -5,
+    bottom: -28,
+    opacity: 0.08,
+  },
+
+  eventFeatureMarkText: {
+    color: C.white,
+    fontSize: 130,
+    fontWeight: '900',
+  },
+
+  comingSoonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+
+  comingSoon: {
+    color: C.white,
+    fontSize: 7,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+
+  profileCard: {
+    backgroundColor: '#090909',
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 14,
+    padding: 23,
+    alignItems: 'center',
+    marginTop: 12,
+    marginBottom: 10,
+  },
+
+  avatarLarge: {
+    height: 78,
+    width: 78,
+    borderRadius: 39,
+    backgroundColor: '#222222',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 13,
+    borderWidth: 1,
+    borderColor: '#484848',
+  },
+
+  profileName: {
+    color: C.white,
+    fontSize: 16,
+    fontWeight: '900',
+    marginBottom: 5,
+  },
+
+  profileEmail: {
+    color: C.grey,
+    fontSize: 10,
+  },
+
+  photoButton: {
+    marginTop: 17,
+    borderWidth: 1,
+    borderColor: '#454545',
+    paddingHorizontal: 17,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+
+  photoButtonText: {
+    color: C.white,
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+
+  readOnlyField: {
+    backgroundColor: '#080808',
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 9,
+    padding: 13,
+    marginBottom: 17,
+  },
+
+  readOnlyValue: {
+    color: C.white,
+    fontSize: 13,
+    fontWeight: '700',
+    marginTop: 7,
+  },
+
+  readOnlyHint: {
+    color: C.grey,
+    fontSize: 9,
+    lineHeight: 15,
+    marginTop: 7,
+  },
+
+  bottomNav: {
+    flexDirection: 'row',
+    borderTopWidth: 1,
+    borderTopColor: C.line,
+    backgroundColor: '#080808',
+    paddingTop: 10,
+    paddingBottom: 7,
+  },
+
+  navItem: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 48,
+  },
+
+  navSymbol: {
+    color: C.grey,
+    fontSize: 19,
+    marginBottom: 4,
+  },
+
+  navSymbolActive: {
+    color: C.white,
+  },
+
+  navLabel: {
+    color: C.grey,
+    fontSize: 8,
+    fontWeight: '600',
+  },
+
+  navLabelActive: {
+    color: C.white,
+    fontWeight: '900',
+  },
+
+  navIndicator: {
+    width: 14,
+    height: 2,
+    backgroundColor: C.white,
+    borderRadius: 2,
+    marginTop: 5,
+  },
+
+  bottomSpace: {
+    height: 25,
+  },
+}); 

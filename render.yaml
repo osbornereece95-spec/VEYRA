@@ -1,0 +1,18 @@
+﻿services:
+  - type: web
+    name: veyra-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    disk:
+      name: veyra-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: VEYRA_DATA_DIR
+        value: /var/data
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ADMIN_KEY
+        generateValue: true

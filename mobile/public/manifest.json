@@ -1,0 +1,19 @@
+﻿{
+  "id": "/",
+  "name": "VEYRA Creator Network",
+  "short_name": "VEYRA",
+  "description": "VEYRA Creator Network",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#080808",
+  "theme_color": "#080808",
+  "icons": [
+    {
+      "src": "/icon.png",
+      "sizes": "any",
+      "type": "image/png"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+
+
+{
+  "expo": {
+    "name": "VEYRA",
+    "slug": "veyra",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#080808",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      }
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "name": "VEYRA",
+      "shortName": "VEYRA",
+      "description": "VEYRA Creator Network",
+      "favicon": "./assets/favicon.png",
+      "themeColor": "#080808",
+      "backgroundColor": "#080808",
+      "display": "standalone",
+      "startUrl": "/"
+    },
+    "plugins": [
+      "expo-secure-store"
+    ]
+  }
+}
+
