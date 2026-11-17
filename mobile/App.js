@@ -9,8 +9,9 @@ import {
   ScrollView,
   StyleSheet,
   Alert,
-  ActivityIndicator,
+   ActivityIndicator,
   Image,
+  Platform,
 } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import * as ImagePicker from 'expo-image-picker';
@@ -54,13 +55,15 @@ const C = {
   accent: '#FFFFFF',
 };
 
+
 const tabs = [
-  { name: 'Home', symbol: 'âŒ‚' },
-  { name: 'Analytics', symbol: 'â–¥' },
-  { name: 'Goals', symbol: 'â—Ž' },
-  { name: 'Events', symbol: 'âœ¦' },
-  { name: 'Profile', symbol: 'â—‰' },
+  { name: 'Home', symbol: '\u2302' },
+  { name: 'Analytics', symbol: '\u25A5' },
+  { name: 'Goals', symbol: '\u25CE' },
+  { name: 'Events', symbol: '\u2726' },
+  { name: 'Profile', symbol: '\u25C9' },
 ];
+
 
 const MONTHLY_HOUR_TARGET = 15;
 const VALID_DAYS_TARGET = 7;
@@ -110,7 +113,7 @@ function getProfileImageUrl(profilePicture) {
 }
 
 function formatMetric(value) {
-  if (value === null || value === undefined || value === '') return 'â€”';
+  if (value === null || value === undefined || value === '') return '\u2014';
 
   const number = Number(value);
 
@@ -247,8 +250,11 @@ function AuthScreen({ onRegister, loading }) {
 
       <ScrollView contentContainerStyle={styles.authContainer}>
         <View style={styles.authBrand}>
-          <Text style={styles.logo}>VEYRA.</Text>
-          <Text style={styles.logoSubtitle}>CREATOR NETWORK</Text>
+          <Image
+            source={require('./assets/veyra-logo.png')}
+            style={styles.authLogo}
+            resizeMode="contain"
+/>
         </View>
 
         <View style={styles.authHeading}>
@@ -411,7 +417,7 @@ function TargetCard({ title, value, target, unit, description }) {
     <View style={styles.targetCard}>
       <View style={styles.targetTop}>
         <View style={styles.targetIcon}>
-          <Text style={styles.targetIconText}>â—Ž</Text>
+          <Text style={styles.targetIconText}>{'\u25CE'}</Text>
         </View>
         <Text style={styles.targetLabel}>{title}</Text>
         <View style={styles.targetStatus}>
@@ -489,7 +495,7 @@ function HomeScreen({
             </Text>
           </View>
           <View style={styles.heroArrow}>
-            <Text style={styles.heroArrowText}>â†—</Text>
+            <Text style={styles.heroArrowText}>{'\u2197'}</Text>
           </View>
         </View>
       </View>
@@ -540,13 +546,13 @@ function HomeScreen({
           <View style={{ flex: 1 }}>
             <Text style={styles.infoTitle}>Current tier</Text>
             <Text style={styles.readOnlyValue}>
-              {performance?.tier_status || 'â€”'}
+              {performance?.tier_status || '\u2014'}
             </Text>
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.infoTitle}>Previous tier</Text>
             <Text style={styles.readOnlyValue}>
-              {performance?.tier_last_month || 'â€”'}
+              {performance?.tier_last_month || '\u2014'}
             </Text>
           </View>
         </View>
@@ -590,7 +596,7 @@ function HomeScreen({
         activeOpacity={0.85}
       >
         <View style={styles.networkIcon}>
-          <Text style={styles.networkIconText}>âœ¦</Text>
+          <Text style={styles.networkIconText}>{'\u2726'}</Text>
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.networkTitle}>Opportunities await.</Text>
@@ -598,7 +604,7 @@ function HomeScreen({
             Explore creator events, campaigns and announcements.
           </Text>
         </View>
-        <Text style={styles.networkArrow}>â€º</Text>
+        <Text style={styles.networkArrow}>{'\u203A'}</Text>
       </TouchableOpacity>
 
       <View style={styles.bottomSpace} />
@@ -632,7 +638,7 @@ function AnalyticsScreen({
       />
 
       <View style={styles.analyticsHero}>
-        <Text style={styles.heroEyebrow}>DIAMONDS Â· LAST 30 DAYS</Text>
+        <Text style={styles.heroEyebrow}>DIAMONDS {'\u00B7'} LAST 30 DAYS</Text>
         <Text style={styles.analyticsHeroNumber}>
           {formatMetric(performance?.diamonds_l30d)}
         </Text>
@@ -687,13 +693,13 @@ function AnalyticsScreen({
           <View style={{ flex: 1 }}>
             <Text style={styles.infoTitle}>Current tier</Text>
             <Text style={styles.readOnlyValue}>
-              {performance?.tier_status || 'â€”'}
+              {performance?.tier_status || '\u2014'}
             </Text>
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.infoTitle}>Previous tier</Text>
             <Text style={styles.readOnlyValue}>
-              {performance?.tier_last_month || 'â€”'}
+              {performance?.tier_last_month || '\u2014'}
             </Text>
           </View>
         </View>
@@ -1003,7 +1009,7 @@ function ProfileScreen({
       <Button title="SIGN OUT" secondary onPress={onLogout} />
 
       <Text style={styles.authFooter}>
-        VEYRA CREATOR NETWORK Â· VERSION 1.1
+        VEYRA CREATOR NETWORK {'\u00B7'} VERSION 1.1
       </Text>
 
       <View style={styles.bottomSpace} />
@@ -1436,6 +1442,12 @@ const styles = StyleSheet.create({
 
   authBrand: {
     marginBottom: 55,
+    alignItems: 'flex-start',
+  },
+
+  authLogo: {
+    width: 230,
+    height: 90,
   },
 
   logo: {
@@ -2227,4 +2239,5 @@ const styles = StyleSheet.create({
     height: 25,
   },
 }); 
+
 
