@@ -1,11 +1,16 @@
 ﻿
+
 import os
 import re
 import io
-import sqlite3
+import psycopg
+from psycopg.rows import dict_row
 import hashlib
 import secrets
 import uuid
+import urllib.parse
+import urllib.request
+from urllib.error import HTTPError, URLError
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
@@ -13,6 +18,7 @@ import jwt
 from dotenv import load_dotenv
 from openpyxl import load_workbook
 from fastapi import FastAPI, HTTPException, Depends, Header, UploadFile, File
+from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -45,15 +51,21 @@ app.add_middleware(
 password_hash = PasswordHash.recommended()
 security = HTTPBearer()
 
-DATA_DIR = Path(
-    os.getenv("VEYRA_DATA_DIR", str(Path(__file__).parent))
-).expanduser()
+DATABASE_URL = os.getenv("DATABASE_URL")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+SUPABASE_STORAGE_BUCKET = os.getenv(
+    "SUPABASE_STORAGE_BUCKET",
+    "profile-pictures"
+)
 
-DATA_DIR.mkdir(parents=True, exist_ok=True)
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL must be set")
 
-DATABASE = DATA_DIR / "veyra.db"
-UPLOAD_DIR = DATA_DIR / "profile_pictures"
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+    raise RuntimeError(
+        "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set"
+    )
 
 MAX_UPLOAD_SIZE = 5 * 1024 * 1024
 
@@ -152,117 +164,13 @@ TEXT_COLUMNS = {
 }
 
 
+
 def connect_db():
-    connection = sqlite3.connect(DATABASE)
-    connection.row_factory = sqlite3.Row
-    return connection
-
-
-def add_missing_columns(db, table_name, definitions):
-    existing = {
-        row["name"]
-        for row in db.execute(
-            f"PRAGMA table_info({table_name})"
-        ).fetchall()
-    }
-
-    for column_name, column_type in definitions.items():
-        if column_name not in existing:
-            db.execute(
-                f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"
-            )
-
-
-def initialise_database():
-    with connect_db() as db:
-        db.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email TEXT NOT NULL UNIQUE,
-                username TEXT NOT NULL,
-                password_hash TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            )
-        """)
-
-        db.execute("""
-            CREATE TABLE IF NOT EXISTS invitations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                code_hash TEXT NOT NULL UNIQUE,
-                used INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL
-            )
-        """)
-
-        db.execute("""
-            CREATE TABLE IF NOT EXISTS creator_performance (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                creator_username TEXT NOT NULL,
-                followers INTEGER NOT NULL,
-                likes INTEGER NOT NULL,
-                diamonds_l30d INTEGER NOT NULL,
-                valid_live_days_l30d INTEGER NOT NULL,
-                live_duration_l30d REAL NOT NULL,
-                imported_at TEXT NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(id)
-            )
-        """)
-
-        db.execute("""
-            CREATE TABLE IF NOT EXISTS backstage_performance (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                creator_username TEXT NOT NULL,
-                normalised_username TEXT NOT NULL UNIQUE,
-                followers INTEGER NOT NULL DEFAULT 0,
-                likes INTEGER NOT NULL DEFAULT 0,
-                diamonds_l30d INTEGER NOT NULL DEFAULT 0,
-                valid_live_days_l30d INTEGER NOT NULL DEFAULT 0,
-                live_duration_l30d REAL NOT NULL DEFAULT 0,
-                imported_at TEXT NOT NULL
-            )
-        """)
-
-        user_columns = {
-            row["name"]
-            for row in db.execute(
-                "PRAGMA table_info(users)"
-            ).fetchall()
-        }
-
-        if "display_name" not in user_columns:
-            db.execute(
-                "ALTER TABLE users ADD COLUMN display_name TEXT NOT NULL DEFAULT ''"
-            )
-
-        if "profile_picture" not in user_columns:
-            db.execute(
-                "ALTER TABLE users ADD COLUMN profile_picture TEXT"
-            )
-
-        add_missing_columns(db, "backstage_performance", {
-            "videos": "INTEGER",
-            "diamonds_from_fan_club_l30d": "REAL",
-            "active_fan_club_members_l30d": "INTEGER",
-            "last_live": "TEXT",
-            "tier_status": "TEXT",
-            "tier_last_month": "TEXT",
-            "achieved_star_creator": "TEXT",
-            "star_creator_days_this_month": "INTEGER",
-        })
-
-        db.execute("""
-            CREATE INDEX IF NOT EXISTS idx_performance_user_imported
-            ON creator_performance(user_id, imported_at)
-        """)
-
-        db.execute("""
-            CREATE INDEX IF NOT EXISTS idx_backstage_username
-            ON backstage_performance(normalised_username)
-        """)
-
-
-initialise_database()
+    return psycopg.connect(
+        DATABASE_URL,
+        row_factory=dict_row,
+        prepare_threshold=None
+    )
 
 
 class RegisterRequest(BaseModel):
@@ -368,7 +276,7 @@ def get_current_user(
         user = db.execute(
             """
             SELECT id, email, username, display_name, profile_picture
-            FROM users WHERE id = ?
+            FROM users WHERE id = %s
             """,
             (user_id,)
         ).fetchone()
@@ -454,7 +362,7 @@ def create_invitation(admin=Depends(check_admin)):
         db.execute(
             """
             INSERT INTO invitations (code_hash, created_at)
-            VALUES (?, ?)
+            VALUES (%s, %s)
             """,
             (
                 hash_invitation(code),
@@ -502,7 +410,7 @@ def admin_update_username(
 
     with connect_db() as db:
         existing_user = db.execute(
-            "SELECT id FROM users WHERE id = ?",
+            "SELECT id FROM users WHERE id = %s",
             (user_id,)
         ).fetchone()
 
@@ -515,7 +423,7 @@ def admin_update_username(
         duplicate = db.execute(
             """
             SELECT id FROM users
-            WHERE lower(username) = ? AND id != ?
+            WHERE lower(username) = %s AND id != %s
             """,
             (normalised, user_id)
         ).fetchone()
@@ -527,7 +435,7 @@ def admin_update_username(
             )
 
         db.execute(
-            "UPDATE users SET username = ? WHERE id = ?",
+            "UPDATE users SET username = %s WHERE id = %s",
             (username, user_id)
         )
 
@@ -535,7 +443,7 @@ def admin_update_username(
             """
             SELECT creator_username
             FROM backstage_performance
-            WHERE normalised_username = ?
+            WHERE normalised_username = %s
             """,
             (normalised,)
         ).fetchone()
@@ -543,7 +451,7 @@ def admin_update_username(
         updated_user = db.execute(
             """
             SELECT id, email, username, display_name, profile_picture
-            FROM users WHERE id = ?
+            FROM users WHERE id = %s
             """,
             (user_id,)
         ).fetchone()
@@ -768,7 +676,7 @@ async def import_backstage(
                         star_creator_days_this_month,
                         imported_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 
                     ON CONFLICT(normalised_username) DO UPDATE SET
                         creator_username = excluded.creator_username,
@@ -831,7 +739,7 @@ async def import_backstage(
                         live_duration_l30d,
                         imported_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         user_id,
@@ -887,7 +795,7 @@ def register(data: RegisterRequest):
 
     with connect_db() as db:
         invitation = db.execute(
-            "SELECT id, used FROM invitations WHERE code_hash = ?",
+            "SELECT id, used FROM invitations WHERE code_hash = %s FOR UPDATE",
             (hash_invitation(data.invitation_code),)
         ).fetchone()
 
@@ -898,7 +806,7 @@ def register(data: RegisterRequest):
             )
 
         duplicate_username = db.execute(
-            "SELECT id FROM users WHERE lower(username) = ?",
+            "SELECT id FROM users WHERE lower(username) = %s",
             (normalise_username(username),)
         ).fetchone()
 
@@ -918,7 +826,8 @@ def register(data: RegisterRequest):
                     password_hash,
                     created_at
                 )
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING id
                 """,
                 (
                     email,
@@ -929,18 +838,18 @@ def register(data: RegisterRequest):
                 )
             )
 
-        except sqlite3.IntegrityError:
+        except psycopg.IntegrityError:
             raise HTTPException(
                 status_code=409,
                 detail="An account with this email already exists"
             )
 
         db.execute(
-            "UPDATE invitations SET used = 1 WHERE id = ?",
+            "UPDATE invitations SET used = 1 WHERE id = %s",
             (invitation["id"],)
         )
 
-        user_id = cursor.lastrowid
+        user_id = cursor.fetchone()["id"]
 
     return {
         "message": "Account created successfully",
@@ -957,7 +866,7 @@ def login(data: LoginRequest):
         user = db.execute(
             """
             SELECT id, email, username, password_hash
-            FROM users WHERE email = ?
+            FROM users WHERE email = %s
             """,
             (email,)
         ).fetchone()
@@ -1006,14 +915,14 @@ def update_my_profile(
 
     with connect_db() as db:
         db.execute(
-            "UPDATE users SET display_name = ? WHERE id = ?",
+            "UPDATE users SET display_name = %s WHERE id = %s",
             (display_name, user["id"])
         )
 
         updated_user = db.execute(
             """
             SELECT id, email, username, display_name, profile_picture
-            FROM users WHERE id = ?
+            FROM users WHERE id = %s
             """,
             (user["id"],)
         ).fetchone()
@@ -1068,34 +977,46 @@ async def upload_profile_picture(
         )
 
     extension = ALLOWED_IMAGE_TYPES[content_type]
+    filename = f"user_{user['id']}_{uuid.uuid4().hex}{extension}"
 
-    filename = (
-        f"user_{user['id']}_{uuid.uuid4().hex}{extension}"
+    encoded_bucket = urllib.parse.quote(SUPABASE_STORAGE_BUCKET, safe="")
+    encoded_filename = urllib.parse.quote(filename, safe="")
+    storage_url = (
+        f"{SUPABASE_URL}/storage/v1/object/"
+        f"{encoded_bucket}/{encoded_filename}"
     )
 
-    destination = UPLOAD_DIR / filename
+    request = urllib.request.Request(
+        storage_url,
+        data=contents,
+        method="POST",
+        headers={
+            "apikey": SUPABASE_SERVICE_ROLE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+            "Content-Type": content_type,
+            "Cache-Control": "3600",
+            "x-upsert": "true",
+        }
+    )
 
-    with connect_db() as db:
-        old_picture = db.execute(
-            "SELECT profile_picture FROM users WHERE id = ?",
-            (user["id"],)
-        ).fetchone()
-
-        destination.write_bytes(contents)
-
-        db.execute(
-            "UPDATE users SET profile_picture = ? WHERE id = ?",
-            (filename, user["id"])
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            if response.status not in (200, 201):
+                raise HTTPException(
+                    status_code=502,
+                    detail="Profile picture storage failed"
+                )
+    except (HTTPError, URLError, TimeoutError):
+        raise HTTPException(
+            status_code=502,
+            detail="Could not upload the profile picture to storage"
         )
 
-    if old_picture and old_picture["profile_picture"]:
-        old_path = UPLOAD_DIR / old_picture["profile_picture"]
-
-        if old_path.parent == UPLOAD_DIR and old_path.exists():
-            try:
-                old_path.unlink()
-            except OSError:
-                pass
+    with connect_db() as db:
+        db.execute(
+            "UPDATE users SET profile_picture = %s WHERE id = %s",
+            (filename, user["id"])
+        )
 
     return {
         "message": "Profile picture updated successfully",
@@ -1114,25 +1035,16 @@ def get_profile_picture(filename: str):
             detail="Image not found"
         )
 
-    path = UPLOAD_DIR / filename
+    encoded_bucket = urllib.parse.quote(SUPABASE_STORAGE_BUCKET, safe="")
+    encoded_filename = urllib.parse.quote(filename, safe="")
+    public_url = (
+        f"{SUPABASE_URL}/storage/v1/object/public/"
+        f"{encoded_bucket}/{encoded_filename}"
+    )
 
-    if not path.is_file():
-        raise HTTPException(
-            status_code=404,
-            detail="Image not found"
-        )
-
-    from fastapi.responses import FileResponse
-
-    media_type = {
-        ".jpg": "image/jpeg",
-        ".png": "image/png",
-        ".webp": "image/webp"
-    }[path.suffix]
-
-    return FileResponse(
-        path,
-        media_type=media_type
+    return RedirectResponse(
+        url=public_url,
+        status_code=302
     )
 
 
@@ -1160,7 +1072,7 @@ def my_performance(user=Depends(get_current_user)):
                 star_creator_days_this_month,
                 imported_at
             FROM backstage_performance
-            WHERE normalised_username = ?
+            WHERE normalised_username = %s
             LIMIT 1
             """,
             (username,)
@@ -1179,7 +1091,7 @@ def my_performance(user=Depends(get_current_user)):
                     live_duration_l30d,
                     imported_at
                 FROM creator_performance
-                WHERE user_id = ?
+                WHERE user_id = %s
                 ORDER BY imported_at DESC, id DESC
                 """,
                 (user["id"],)
