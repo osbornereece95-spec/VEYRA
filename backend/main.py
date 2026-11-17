@@ -176,9 +176,6 @@ def connect_db():
 class RegisterRequest(BaseModel):
     invitation_code: str = Field(min_length=1, max_length=100)
     username: str = Field(min_length=1, max_length=50)
-    email: str = Field(min_length=5, max_length=254)
-    password: str = Field(min_length=12, max_length=128)
-
 
 class LoginRequest(BaseModel):
     email: str
@@ -248,7 +245,7 @@ def create_token(user_id: int):
     payload = {
         "sub": str(user_id),
         "iat": now,
-        "exp": now + timedelta(hours=12),
+        "exp": now + timedelta(days=30),
     }
 
     return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
@@ -778,14 +775,8 @@ async def import_backstage(
 
 @app.post("/auth/register")
 def register(data: RegisterRequest):
-    email = data.email.strip().lower()
     username = data.username.strip().lstrip("@")
-
-    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
-        raise HTTPException(
-            status_code=400,
-            detail="Enter a valid email address"
-        )
+    normalised = normalise_username(username)
 
     if not valid_username(username):
         raise HTTPException(
@@ -794,8 +785,14 @@ def register(data: RegisterRequest):
         )
 
     with connect_db() as db:
+        # Lock and validate the invitation.
         invitation = db.execute(
-            "SELECT id, used FROM invitations WHERE code_hash = %s FOR UPDATE",
+            """
+            SELECT id, used
+            FROM invitations
+            WHERE code_hash = %s
+            FOR UPDATE
+            """,
             (hash_invitation(data.invitation_code),)
         ).fetchone()
 
@@ -805,86 +802,83 @@ def register(data: RegisterRequest):
                 detail="Invalid or already used invitation code"
             )
 
-        duplicate_username = db.execute(
-            "SELECT id FROM users WHERE lower(username) = %s",
-            (normalise_username(username),)
+        # Only imported creators are eligible.
+        performance = db.execute(
+            """
+            SELECT creator_username
+            FROM backstage_performance
+            WHERE normalised_username = %s
+            LIMIT 1
+            """,
+            (normalised,)
         ).fetchone()
 
-        if duplicate_username:
+        if not performance:
             raise HTTPException(
-                status_code=409,
-                detail="That TikTok username is already registered"
+                status_code=403,
+                detail="This TikTok username is not in the imported creator performance data"
             )
 
-        try:
-            cursor = db.execute(
-                """
-                INSERT INTO users (
-                    email,
-                    username,
-                    display_name,
-                    password_hash,
-                    created_at
+        # Reuse an existing account rather than creating a duplicate.
+        existing_user = db.execute(
+            """
+            SELECT id
+            FROM users
+            WHERE lower(username) = %s
+            FOR UPDATE
+            """,
+            (normalised,)
+        ).fetchone()
+
+        if existing_user:
+            user_id = existing_user["id"]
+        else:
+            internal_email = f"{normalised}@creators.veyra.invalid"
+            internal_password = secrets.token_urlsafe(48)
+
+            try:
+                cursor = db.execute(
+                    """
+                    INSERT INTO users (
+                        email,
+                        username,
+                        display_name,
+                        password_hash,
+                        created_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        internal_email,
+                        username,
+                        username,
+                        password_hash.hash(internal_password),
+                        datetime.now(timezone.utc).isoformat()
+                    )
                 )
-                VALUES (%s, %s, %s, %s, %s)
-                RETURNING id
-                """,
-                (
-                    email,
-                    username,
-                    username,
-                    password_hash.hash(data.password),
-                    datetime.now(timezone.utc).isoformat()
+                user_id = cursor.fetchone()["id"]
+
+            except psycopg.IntegrityError:
+                raise HTTPException(
+                    status_code=409,
+                    detail="This creator account could not be created. Please contact the administrator."
                 )
-            )
 
-        except psycopg.IntegrityError:
-            raise HTTPException(
-                status_code=409,
-                detail="An account with this email already exists"
-            )
-
+        # Redeem the invitation only after successful account validation.
         db.execute(
             "UPDATE invitations SET used = 1 WHERE id = %s",
             (invitation["id"],)
         )
 
-        user_id = cursor.fetchone()["id"]
-
     return {
-        "message": "Account created successfully",
+        "message": "Account activated successfully",
         "access_token": create_token(user_id),
         "token_type": "bearer"
     }
 
 
-@app.post("/auth/login")
-def login(data: LoginRequest):
-    email = data.email.strip().lower()
 
-    with connect_db() as db:
-        user = db.execute(
-            """
-            SELECT id, email, username, password_hash
-            FROM users WHERE email = %s
-            """,
-            (email,)
-        ).fetchone()
-
-    if not user or not password_hash.verify(
-        data.password,
-        user["password_hash"]
-    ):
-        raise HTTPException(
-            status_code=401,
-            detail="Incorrect email or password"
-        )
-
-    return {
-        "message": "Login successful",
-        "access_token": create_token(user["id"]),
-        "token_type": "bearer"
-    }
 
 
 @app.get("/me")
@@ -1129,4 +1123,7 @@ def my_performance(user=Depends(get_current_user)):
         "message": "Performance data retrieved",
         "performance": result
     }
+
+
+
 

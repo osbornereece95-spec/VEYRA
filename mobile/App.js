@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import {
   SafeAreaView,
   StatusBar,
@@ -16,7 +16,31 @@ import * as SecureStore from 'expo-secure-store';
 import * as ImagePicker from 'expo-image-picker';
 import { File } from 'expo-file-system';
 
-const API_URL = 'https://your-render-url.onrender.com';
+const API_URL = 'https://veyra-api-r8eq.onrender.com';
+
+async function getStoredToken() {
+  if (Platform.OS === 'web') {
+    return localStorage.getItem('veyra_token');
+  }
+  return SecureStore.getItemAsync('veyra_token');
+}
+
+async function setStoredToken(token) {
+  if (Platform.OS === 'web') {
+    localStorage.setItem('veyra_token', token);
+    return;
+  }
+  return SecureStore.setItemAsync('veyra_token', token);
+}
+
+async function deleteStoredToken() {
+  if (Platform.OS === 'web') {
+    localStorage.removeItem('veyra_token');
+    return;
+  }
+  return SecureStore.deleteItemAsync('veyra_token');
+}
+
 
 const C = {
   black: '#050505',
@@ -31,11 +55,11 @@ const C = {
 };
 
 const tabs = [
-  { name: 'Home', symbol: '⌂' },
-  { name: 'Analytics', symbol: '▥' },
-  { name: 'Goals', symbol: '◎' },
-  { name: 'Events', symbol: '✦' },
-  { name: 'Profile', symbol: '◉' },
+  { name: 'Home', symbol: 'âŒ‚' },
+  { name: 'Analytics', symbol: 'â–¥' },
+  { name: 'Goals', symbol: 'â—Ž' },
+  { name: 'Events', symbol: 'âœ¦' },
+  { name: 'Profile', symbol: 'â—‰' },
 ];
 
 const MONTHLY_HOUR_TARGET = 15;
@@ -86,7 +110,7 @@ function getProfileImageUrl(profilePicture) {
 }
 
 function formatMetric(value) {
-  if (value === null || value === undefined || value === '') return '—';
+  if (value === null || value === undefined || value === '') return 'â€”';
 
   const number = Number(value);
 
@@ -199,34 +223,21 @@ function Field({
   );
 }
 
-function AuthScreen({ onLogin, onRegister, loading }) {
-  const [screen, setScreen] = useState('login');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+
+function AuthScreen({ onRegister, loading }) {
   const [inviteCode, setInviteCode] = useState('');
   const [username, setUsername] = useState('');
 
-  function submitLogin() {
-    if (!email.trim() || !password) {
-      Alert.alert('Missing details', 'Enter your email and password.');
+  function submitActivation() {
+    if (!username.trim() || !inviteCode.trim()) {
+      Alert.alert(
+        'Missing details',
+        'Enter your TikTok username and invitation code.'
+      );
       return;
     }
 
-    onLogin(email.trim(), password);
-  }
-
-  function submitRegister() {
-    if (!email.trim() || !password || !inviteCode.trim() || !username.trim()) {
-      Alert.alert('Missing details', 'Complete all required fields.');
-      return;
-    }
-
-    if (password.length < 12) {
-      Alert.alert('Password too short', 'Use at least 12 characters.');
-      return;
-    }
-
-    onRegister(email.trim(), username.trim(), inviteCode.trim(), password);
+    onRegister(username.trim(), inviteCode.trim());
   }
 
   return (
@@ -242,73 +253,33 @@ function AuthScreen({ onLogin, onRegister, loading }) {
 
         <View style={styles.authHeading}>
           <Text style={styles.authEyebrow}>EXCLUSIVE CREATOR ACCESS</Text>
-          <Text style={styles.authTitle}>
-            {screen === 'login' ? 'Welcome back.' : 'Your next chapter.'}
-          </Text>
+          <Text style={styles.authTitle}>Your next chapter.</Text>
           <Text style={styles.muted}>
-            {screen === 'login'
-              ? 'Sign in to your VEYRA creator space.'
-              : 'Create your invited creator account.'}
+            Activate your invited VEYRA creator account.
           </Text>
         </View>
 
-        {screen === 'register' && (
-          <>
-            <Field
-              label="INVITATION CODE"
-              value={inviteCode}
-              onChangeText={setInviteCode}
-              placeholder="Enter your invitation code"
-            />
-            <Field
-              label="TIKTOK USERNAME"
-              value={username}
-              onChangeText={setUsername}
-              placeholder="@yourusername"
-            />
-          </>
-        )}
-
         <Field
-          label="EMAIL ADDRESS"
-          value={email}
-          onChangeText={setEmail}
-          placeholder="you@example.com"
-          keyboardType="email-address"
+          label="TIKTOK USERNAME"
+          value={username}
+          onChangeText={setUsername}
+          placeholder="@yourusername"
+          autoCapitalize="none"
         />
 
         <Field
-          label="PASSWORD"
-          value={password}
-          onChangeText={setPassword}
-          placeholder={screen === 'register' ? 'At least 12 characters' : 'Your password'}
-          secureTextEntry
+          label="INVITATION CODE"
+          value={inviteCode}
+          onChangeText={setInviteCode}
+          placeholder="Enter your invitation code"
+          autoCapitalize="none"
         />
 
         <Button
-          title={
-            loading
-              ? 'PLEASE WAIT...'
-              : screen === 'login'
-                ? 'SIGN IN'
-                : 'CREATE ACCOUNT'
-          }
-          onPress={screen === 'login' ? submitLogin : submitRegister}
+          title={loading ? 'PLEASE WAIT...' : 'ACTIVATE ACCOUNT'}
+          onPress={submitActivation}
           disabled={loading}
         />
-
-        <TouchableOpacity
-          style={styles.switchAuth}
-          onPress={() => setScreen(screen === 'login' ? 'register' : 'login')}
-          disabled={loading}
-        >
-          <Text style={styles.muted}>
-            {screen === 'login' ? "Don't have an account? " : 'Already a member? '}
-            <Text style={styles.whiteText}>
-              {screen === 'login' ? 'Request access' : 'Sign in'}
-            </Text>
-          </Text>
-        </TouchableOpacity>
 
         <Text style={styles.authFooter}>
           PRIVATE NETWORK · TIKTOK LIVE CREATORS
@@ -440,7 +411,7 @@ function TargetCard({ title, value, target, unit, description }) {
     <View style={styles.targetCard}>
       <View style={styles.targetTop}>
         <View style={styles.targetIcon}>
-          <Text style={styles.targetIconText}>◎</Text>
+          <Text style={styles.targetIconText}>â—Ž</Text>
         </View>
         <Text style={styles.targetLabel}>{title}</Text>
         <View style={styles.targetStatus}>
@@ -518,7 +489,7 @@ function HomeScreen({
             </Text>
           </View>
           <View style={styles.heroArrow}>
-            <Text style={styles.heroArrowText}>↗</Text>
+            <Text style={styles.heroArrowText}>â†—</Text>
           </View>
         </View>
       </View>
@@ -569,13 +540,13 @@ function HomeScreen({
           <View style={{ flex: 1 }}>
             <Text style={styles.infoTitle}>Current tier</Text>
             <Text style={styles.readOnlyValue}>
-              {performance?.tier_status || '—'}
+              {performance?.tier_status || 'â€”'}
             </Text>
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.infoTitle}>Previous tier</Text>
             <Text style={styles.readOnlyValue}>
-              {performance?.tier_last_month || '—'}
+              {performance?.tier_last_month || 'â€”'}
             </Text>
           </View>
         </View>
@@ -619,7 +590,7 @@ function HomeScreen({
         activeOpacity={0.85}
       >
         <View style={styles.networkIcon}>
-          <Text style={styles.networkIconText}>✦</Text>
+          <Text style={styles.networkIconText}>âœ¦</Text>
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.networkTitle}>Opportunities await.</Text>
@@ -627,7 +598,7 @@ function HomeScreen({
             Explore creator events, campaigns and announcements.
           </Text>
         </View>
-        <Text style={styles.networkArrow}>›</Text>
+        <Text style={styles.networkArrow}>â€º</Text>
       </TouchableOpacity>
 
       <View style={styles.bottomSpace} />
@@ -661,7 +632,7 @@ function AnalyticsScreen({
       />
 
       <View style={styles.analyticsHero}>
-        <Text style={styles.heroEyebrow}>DIAMONDS · LAST 30 DAYS</Text>
+        <Text style={styles.heroEyebrow}>DIAMONDS Â· LAST 30 DAYS</Text>
         <Text style={styles.analyticsHeroNumber}>
           {formatMetric(performance?.diamonds_l30d)}
         </Text>
@@ -716,13 +687,13 @@ function AnalyticsScreen({
           <View style={{ flex: 1 }}>
             <Text style={styles.infoTitle}>Current tier</Text>
             <Text style={styles.readOnlyValue}>
-              {performance?.tier_status || '—'}
+              {performance?.tier_status || 'â€”'}
             </Text>
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.infoTitle}>Previous tier</Text>
             <Text style={styles.readOnlyValue}>
-              {performance?.tier_last_month || '—'}
+              {performance?.tier_last_month || 'â€”'}
             </Text>
           </View>
         </View>
@@ -1028,17 +999,11 @@ function ProfileScreen({
         />
       </View>
 
-      <SectionHeading title="ACCOUNT INFORMATION" />
-
-      <View style={styles.infoCard}>
-        <Text style={styles.fieldLabel}>EMAIL ADDRESS</Text>
-        <Text style={styles.readOnlyValue}>{email}</Text>
-      </View>
-
+      
       <Button title="SIGN OUT" secondary onPress={onLogout} />
 
       <Text style={styles.authFooter}>
-        VEYRA CREATOR NETWORK · VERSION 1.1
+        VEYRA CREATOR NETWORK Â· VERSION 1.1
       </Text>
 
       <View style={styles.bottomSpace} />
@@ -1059,14 +1024,14 @@ export default function App() {
   useEffect(() => {
     async function restoreSession() {
       try {
-        const token = await SecureStore.getItemAsync('veyra_token');
+        const token = await getStoredToken();
 
         if (token) {
           const profile = await apiRequest('/me', 'GET', null, token);
           setUser(profile);
         }
       } catch (error) {
-        await SecureStore.deleteItemAsync('veyra_token');
+        await deleteStoredToken();
       } finally {
         setLoading(false);
       }
@@ -1090,7 +1055,7 @@ export default function App() {
       setPerformanceError('');
 
       try {
-        const token = await SecureStore.getItemAsync('veyra_token');
+        const token = await getStoredToken();
 
         if (!token) {
           throw new Error('Please sign in again to load your performance.');
@@ -1120,45 +1085,17 @@ export default function App() {
     };
   }, [user]);
 
-  async function handleLogin(email, password) {
-    setAuthLoading(true);
-
-    try {
-      const result = await apiRequest('/auth/login', 'POST', {
-        email,
-        password,
-      });
-
-      await SecureStore.setItemAsync('veyra_token', result.access_token);
-
-      const profile = await apiRequest(
-        '/me',
-        'GET',
-        null,
-        result.access_token
-      );
-
-      setUser(profile);
-      setActiveTab('Home');
-    } catch (error) {
-      Alert.alert('Sign in failed', error.message);
-    } finally {
-      setAuthLoading(false);
-    }
-  }
-
-  async function handleRegister(email, username, invitationCode, password) {
+ 
+  async function handleRegister(username, invitationCode) {
     setAuthLoading(true);
 
     try {
       const result = await apiRequest('/auth/register', 'POST', {
-        email,
         username,
         invitation_code: invitationCode,
-        password,
       });
 
-      await SecureStore.setItemAsync('veyra_token', result.access_token);
+      await setStoredToken(result.access_token);
 
       const profile = await apiRequest(
         '/me',
@@ -1170,14 +1107,15 @@ export default function App() {
       setUser(profile);
       setActiveTab('Home');
     } catch (error) {
-      Alert.alert('Registration failed', error.message);
+      Alert.alert('Activation failed', error.message);
     } finally {
       setAuthLoading(false);
     }
   }
 
+
   async function handleSaveProfile(displayName) {
-    const token = await SecureStore.getItemAsync('veyra_token');
+    const token = await getStoredToken();
 
     if (!token) {
       throw new Error('Your session has expired. Please sign in again.');
@@ -1195,7 +1133,7 @@ export default function App() {
   }
 
   async function handleUploadPicture(asset) {
-    const token = await SecureStore.getItemAsync('veyra_token');
+    const token = await getStoredToken();
 
     if (!token) {
       throw new Error('Your session has expired. Please sign in again.');
@@ -1231,7 +1169,7 @@ export default function App() {
   }
 
   async function handleLogout() {
-    await SecureStore.deleteItemAsync('veyra_token');
+    await deleteStoredToken();
     setUser(null);
     setPerformance(null);
     setPerformanceError('');
@@ -1258,11 +1196,10 @@ export default function App() {
 
   if (!user) {
     return (
-      <AuthScreen
-        onLogin={handleLogin}
-        onRegister={handleRegister}
-        loading={authLoading}
-      />
+<AuthScreen
+  onRegister={handleRegister}
+  loading={authLoading}
+/>
     );
   }
 
@@ -2290,3 +2227,4 @@ const styles = StyleSheet.create({
     height: 25,
   },
 }); 
+
