@@ -392,7 +392,7 @@ def send_discord_invitation(application_id: str, interaction_token: str, discord
         req = urllib.request.Request(
             url,
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "User-Agent": "DiscordBot (https://veyra-api-r8eq.onrender.com, 1.0)"},
             method="PATCH"
         )
         urllib.request.urlopen(req, timeout=10)
@@ -420,6 +420,7 @@ def send_discord_invitation(application_id: str, interaction_token: str, discord
             data=json.dumps({"recipient_id": discord_user_id}).encode(),
             headers={
                 "Authorization": f"Bot {DISCORD_BOT_TOKEN}",
+                "User-Agent": "DiscordBot (https://veyra-api-r8eq.onrender.com, 1.0)",
                 "Content-Type": "application/json"
             },
             method="POST"
@@ -447,6 +448,7 @@ def send_discord_invitation(application_id: str, interaction_token: str, discord
             data=json.dumps(message).encode(),
             headers={
                 "Authorization": f"Bot {DISCORD_BOT_TOKEN}",
+                "User-Agent": "DiscordBot (https://veyra-api-r8eq.onrender.com, 1.0)",
                 "Content-Type": "application/json"
             },
             method="POST"
@@ -1333,6 +1335,7 @@ def post_discord_invite_message(
         data=json.dumps(payload).encode(),
         headers={
             "Authorization": f"Bot {DISCORD_BOT_TOKEN}",
+                "User-Agent": "DiscordBot (https://veyra-api-r8eq.onrender.com, 1.0)",
             "Content-Type": "application/json"
         },
         method="POST"
