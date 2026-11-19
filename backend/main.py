@@ -1,6 +1,10 @@
-﻿
+
 
 import os
+import json
+import logging
+
+logger = logging.getLogger(__name__)
 import re
 import io
 import psycopg
@@ -17,18 +21,22 @@ from datetime import datetime, timedelta, timezone
 import jwt
 from dotenv import load_dotenv
 from openpyxl import load_workbook
-from fastapi import FastAPI, HTTPException, Depends, Header, UploadFile, File
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, HTTPException, Depends, Header, UploadFile, File, BackgroundTasks, Request
+from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from pwdlib import PasswordHash
+from nacl.exceptions import BadSignatureError
+from nacl.signing import VerifyKey
 
 
 load_dotenv(Path(__file__).with_name(".env"))
 
 SECRET_KEY = os.getenv("SECRET_KEY")
 ADMIN_KEY = os.getenv("ADMIN_KEY")
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+DISCORD_PUBLIC_KEY = os.getenv("DISCORD_PUBLIC_KEY")
 
 if not SECRET_KEY or not ADMIN_KEY:
     raise RuntimeError("SECRET_KEY and ADMIN_KEY must be set in backend/.env")
@@ -371,6 +379,157 @@ def create_invitation(admin=Depends(check_admin)):
         "message": "Invitation created",
         "invitation_code": code
     }
+
+
+def send_discord_invitation(application_id: str, interaction_token: str, discord_user_id: str):
+    def update_interaction(message: str):
+        url = (
+            f"https://discord.com/api/v10/webhooks/"
+            f"{application_id}/{interaction_token}/messages/@original"
+        )
+        body = json.dumps({"content": message}).encode()
+
+        req = urllib.request.Request(
+            url,
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="PATCH"
+        )
+        urllib.request.urlopen(req, timeout=10)
+
+    try:
+        if not DISCORD_BOT_TOKEN:
+            raise RuntimeError("Discord bot token is not configured")
+
+        code = secrets.token_urlsafe(12)
+
+        with connect_db() as db:
+            db.execute(
+                """
+                INSERT INTO invitations (code_hash, created_at)
+                VALUES (%s, %s)
+                """,
+                (
+                    hash_invitation(code),
+                    datetime.now(timezone.utc).isoformat()
+                )
+            )
+
+        dm_req = urllib.request.Request(
+            "https://discord.com/api/v10/users/@me/channels",
+            data=json.dumps({"recipient_id": discord_user_id}).encode(),
+            headers={
+                "Authorization": f"Bot {DISCORD_BOT_TOKEN}",
+                "Content-Type": "application/json"
+            },
+            method="POST"
+        )
+
+        with urllib.request.urlopen(dm_req, timeout=10) as response:
+            dm_channel = json.loads(response.read().decode())
+
+        message = {
+            "embeds": [{
+                "title": "VEYRA | Your Creator Invitation",
+                "description": (
+                    "Your VEYRA Creator Network invitation is ready.\n\n"
+                    f"**Your invitation code:**\n```{code}```\n\n"
+                    "Enter this code on the VEYRA registration screen "
+                    "to activate your creator account."
+                ),
+                "color": 5793266,
+                "footer": {"text": "VEYRA Creator Network"}
+            }]
+        }
+
+        dm_req = urllib.request.Request(
+            f"https://discord.com/api/v10/channels/{dm_channel['id']}/messages",
+            data=json.dumps(message).encode(),
+            headers={
+                "Authorization": f"Bot {DISCORD_BOT_TOKEN}",
+                "Content-Type": "application/json"
+            },
+            method="POST"
+        )
+
+        urllib.request.urlopen(dm_req, timeout=10)
+
+        update_interaction(
+            "Success! Your VEYRA invitation code has been sent to your private messages."
+        )
+
+    except Exception:
+        logger.exception('Discord invitation delivery failed')
+        try:
+            update_interaction(
+                "I couldn't deliver your invitation. Please check that your "
+                "server allows direct messages from members, then try again."
+            )
+        except Exception:
+            pass
+
+
+@app.post("/discord/interactions")
+async def discord_interactions(
+    request: Request,
+    background_tasks: BackgroundTasks
+):
+    if not DISCORD_PUBLIC_KEY:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Discord public key is not configured"}
+        )
+
+    signature = request.headers.get("x-signature-ed25519")
+    timestamp = request.headers.get("x-signature-timestamp")
+
+    if not signature or not timestamp:
+        return JSONResponse(status_code=401, content={"error": "Invalid signature"})
+
+    body = await request.body()
+
+    try:
+        verify_key = VerifyKey(bytes.fromhex(DISCORD_PUBLIC_KEY))
+        verify_key.verify(
+            timestamp.encode() + body,
+            bytes.fromhex(signature)
+        )
+    except (BadSignatureError, ValueError):
+        return JSONResponse(status_code=401, content={"error": "Invalid signature"})
+
+    interaction = json.loads(body)
+
+    if interaction.get("type") == 1:
+        return JSONResponse(content={"type": 1})
+
+    if interaction.get("type") != 3:
+        return JSONResponse(status_code=400, content={"error": "Unsupported interaction"})
+
+    if interaction.get("data", {}).get("custom_id") != "veyra_get_invite":
+        return JSONResponse(status_code=400, content={"error": "Unknown button"})
+
+    user = (
+        interaction.get("member", {}).get("user")
+        or interaction.get("user")
+    )
+
+    if not user or not user.get("id"):
+        return JSONResponse(status_code=400, content={"error": "User not found"})
+
+    background_tasks.add_task(
+        send_discord_invitation,
+        interaction["application_id"],
+        interaction["token"],
+        user["id"]
+    )
+
+    return JSONResponse(
+        content={
+            "type": 5,
+            "data": {"flags": 64}
+        }
+    )
+
 
 
 @app.get("/admin/users")
@@ -904,7 +1063,7 @@ def update_my_profile(
     if not display_name or len(display_name) > 50:
         raise HTTPException(
             status_code=400,
-            detail="Display name must be 1â€“50 characters"
+            detail="Display name must be 1–50 characters"
         )
 
     with connect_db() as db:
@@ -1125,5 +1284,76 @@ def my_performance(user=Depends(get_current_user)):
     }
 
 
+@app.post("/admin/discord/invite-message")
+def post_discord_invite_message(
+    channel_id: str,
+    admin=Depends(check_admin)
+):
+    if not DISCORD_BOT_TOKEN:
+        raise HTTPException(
+            status_code=500,
+            detail="Discord bot token is not configured"
+        )
 
+    if not channel_id.isdigit():
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid Discord channel ID"
+        )
 
+    payload = {
+        "embeds": [{
+            "title": "VEYRA Creator Network",
+            "description": (
+                "Welcome to VEYRA!\n\n"
+                "Ready to join the Creator Network? "
+                "Click the button below to receive your personal "
+                "invitation code privately through Discord DM.\n\n"
+                "Enter that code on the VEYRA registration screen "
+                "to activate your account."
+            ),
+            "color": 5793266,
+            "footer": {
+                "text": "VEYRA Creator Network"
+            }
+        }],
+        "components": [{
+            "type": 1,
+            "components": [{
+                "type": 2,
+                "style": 1,
+                "label": "Get VEYRA Invitation",
+                "custom_id": "veyra_get_invite"
+            }]
+        }]
+    }
+
+    req = urllib.request.Request(
+        f"https://discord.com/api/v10/channels/{channel_id}/messages",
+        data=json.dumps(payload).encode(),
+        headers={
+            "Authorization": f"Bot {DISCORD_BOT_TOKEN}",
+            "Content-Type": "application/json"
+        },
+        method="POST"
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=15) as response:
+            result = json.loads(response.read().decode())
+
+        return {
+            "message": "VEYRA invitation button posted successfully",
+            "discord_message_id": result.get("id")
+        }
+
+    except HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Discord rejected the message: {exc.read().decode()}"
+        )
+    except URLError:
+        raise HTTPException(
+            status_code=502,
+            detail="Could not connect to Discord"
+        )
