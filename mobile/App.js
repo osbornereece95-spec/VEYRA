@@ -1407,14 +1407,17 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
 
-  content: {
-    flex: 1,
-    paddingHorizontal: 20,
-    paddingTop: 10,
-    zIndex: 1,
-  },
-
-  screenContent: {
+content: {
+  flex: 1,
+  width: '100%',
+  maxWidth: 1100,
+  alignSelf: 'center',
+  paddingHorizontal: 20,
+  paddingTop: 10,
+  zIndex: 1,
+},
+  
+screenContent: {
     paddingBottom: 20,
   },
 
@@ -1426,23 +1429,27 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
 
-  authContainer: {
-    flexGrow: 1,
-    justifyContent: 'center',
-    paddingHorizontal: 27,
-    paddingVertical: 40,
-    backgroundColor: 'transparent',
-  },
-
-  authBrand: {
+authContainer: {
+  flexGrow: 1,
+  justifyContent: 'center',
+  paddingHorizontal: 20,
+  paddingVertical: 30,
+  width: '100%',
+  alignSelf: 'center',
+  backgroundColor: 'transparent',
+},
+  
+authBrand: {
     marginBottom: 55,
     alignItems: 'flex-start',
   },
 
-  authLogo: {
-    width: 230,
-    height: 90,
-  },
+authLogo: {
+  width: '100%',
+  maxWidth: 230,
+  height: 90,
+  resizeMode: 'contain',
+},
 
   logo: {
     color: C.white,
@@ -1785,7 +1792,7 @@ const styles = StyleSheet.create({
   },
 
   metricCard: {
-    width: '48.3%',
+    width: '48%',
     backgroundColor: '#090909',
     borderWidth: 1,
     borderColor: C.line,
