@@ -1,4 +1,5 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useWindowDimensions } from 'react-native';
 import {
   SafeAreaView,
   StatusBar,
@@ -1012,6 +1013,8 @@ function ProfileScreen({
 }
 
 export default function App() {
+  const { width: windowWidth, height: windowHeight, fontScale } = useWindowDimensions();
+  const responsiveScale = Math.min(Math.max(windowWidth / 390, 0.95), 1.2);
   const [user, setUser] = useState(null);
   const [activeTab, setActiveTab] = useState('Home');
   const [loading, setLoading] = useState(true);
@@ -1254,11 +1257,11 @@ export default function App() {
       <View style={styles.app}>
         <SmokeBackground />
 
-        <View style={styles.content}>
+        <View style={[styles.content, { paddingHorizontal: Math.max(12, Math.min(20, windowWidth * 0.05)), paddingTop: 10 * responsiveScale }]}>
           {screens[activeTab]}
         </View>
 
-        <View style={styles.bottomNav}>
+        <View style={[styles.bottomNav, { paddingTop: 10 * responsiveScale, paddingBottom: 7 * responsiveScale }]}>
           {tabs.map((tab) => {
             const selected = activeTab === tab.name;
 
@@ -2240,6 +2243,11 @@ authLogo: {
     height: 25,
   },
 }); 
+
+
+
+
+
 
 
 
