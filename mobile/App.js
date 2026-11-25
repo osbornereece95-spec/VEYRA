@@ -8,6 +8,7 @@ import {
   TextInput,
   TouchableOpacity,
   ScrollView,
+  RefreshControl,
   StyleSheet,
   Alert,
    ActivityIndicator,
@@ -285,7 +286,7 @@ function AuthScreen({ onRegister, loading }) {
         />
 
         <Text style={styles.authFooter}>
-          PRIVATE NETWORK · TIKTOK LIVE CREATORS
+          PRIVATE NETWORK Â· TIKTOK LIVE CREATORS
         </Text>
       </ScrollView>
     </SafeAreaView>
@@ -440,6 +441,8 @@ function TargetCard({ title, value, target, unit, description }) {
 }
 
 function HomeScreen({
+  refreshing,
+  onRefresh,
   performance,
   performanceLoading,
   performanceError,
@@ -451,6 +454,7 @@ function HomeScreen({
 
   return (
     <ScrollView
+      refreshControl={Platform.OS === 'web' ? undefined : <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.white} colors={[C.white]} progressBackgroundColor={C.card} />}
       showsVerticalScrollIndicator={false}
       contentContainerStyle={styles.screenContent}
     >
@@ -610,6 +614,8 @@ function HomeScreen({
 }
 
 function AnalyticsScreen({
+  refreshing,
+  onRefresh,
   performance,
   performanceLoading,
   performanceError,
@@ -617,6 +623,7 @@ function AnalyticsScreen({
 }) {
   return (
     <ScrollView
+      refreshControl={Platform.OS === 'web' ? undefined : <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.white} colors={[C.white]} progressBackgroundColor={C.card} />}
       showsVerticalScrollIndicator={false}
       contentContainerStyle={styles.screenContent}
     >
@@ -734,6 +741,8 @@ function AnalyticsScreen({
 }
 
 function GoalsScreen({
+  refreshing,
+  onRefresh,
   performance,
   performanceLoading,
   performanceError,
@@ -741,6 +750,7 @@ function GoalsScreen({
 }) {
   return (
     <ScrollView
+      refreshControl={Platform.OS === 'web' ? undefined : <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.white} colors={[C.white]} progressBackgroundColor={C.card} />}
       showsVerticalScrollIndicator={false}
       contentContainerStyle={styles.screenContent}
     >
@@ -797,9 +807,12 @@ function GoalsScreen({
   );
 }
 
-function EventsScreen({ user, campaigns, campaignsLoading, campaignsError, announcements, announcementsLoading, announcementsError }) {
+function EventsScreen({
+  refreshing,
+  onRefresh, user, campaigns, campaignsLoading, campaignsError, announcements, announcementsLoading, announcementsError }) {
   return (
     <ScrollView
+      refreshControl={Platform.OS === 'web' ? undefined : <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.white} colors={[C.white]} progressBackgroundColor={C.card} />}
       showsVerticalScrollIndicator={false}
       contentContainerStyle={styles.screenContent}
     >
@@ -931,6 +944,8 @@ function EventsScreen({ user, campaigns, campaignsLoading, campaignsError, annou
 }
 
 function ProfileScreen({
+  refreshing,
+  onRefresh,
   email,
   username,
   displayName,
@@ -1009,6 +1024,7 @@ function ProfileScreen({
 
   return (
     <ScrollView
+      refreshControl={Platform.OS === 'web' ? undefined : <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.white} colors={[C.white]} progressBackgroundColor={C.card} />}
       showsVerticalScrollIndicator={false}
       contentContainerStyle={styles.screenContent}
     >
@@ -1161,6 +1177,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('Home');
   const [loading, setLoading] = useState(true);
   const [authLoading, setAuthLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const [performance, setPerformance] = useState(null);
   const [performanceLoading, setPerformanceLoading] = useState(false);
@@ -1426,6 +1443,162 @@ export default function App() {
     }
   }, []);
 
+  async function handleRefresh() {
+    if (!user || refreshing) return;
+
+    setRefreshing(true);
+
+    try {
+      const token = await getStoredToken();
+      if (!token) throw new Error('Please sign in again to refresh your VEYRA data.');
+
+      const results = await Promise.allSettled([
+        apiRequest('/me', 'GET', null, token),
+        apiRequest('/my-performance', 'GET', null, token),
+        apiRequest('/campaigns', 'GET', null, token),
+        apiRequest('/announcements', 'GET', null, token),
+      ]);
+
+      const [profileResult, performanceResult, campaignsResult, announcementsResult] = results;
+
+      if (profileResult.status === 'fulfilled') setUser(profileResult.value);
+
+      if (performanceResult.status === 'fulfilled') {
+        setPerformance(performanceResult.value.performance || null);
+        setPerformanceError('');
+      } else {
+        setPerformanceError(performanceResult.reason?.message || 'Unable to refresh performance.');
+      }
+
+      if (campaignsResult.status === 'fulfilled') {
+        setCampaigns(Array.isArray(campaignsResult.value.campaigns) ? campaignsResult.value.campaigns : []);
+        setCampaignsError('');
+      } else {
+        setCampaignsError(campaignsResult.reason?.message || 'Unable to refresh campaigns.');
+      }
+
+      if (announcementsResult.status === 'fulfilled') {
+        setAnnouncements(Array.isArray(announcementsResult.value.announcements) ? announcementsResult.value.announcements : []);
+        setAnnouncementsError('');
+      } else {
+        setAnnouncementsError(announcementsResult.reason?.message || 'Unable to refresh announcements.');
+      }
+    } catch (error) {
+      const message = error?.message || 'Unable to refresh VEYRA. Please try again.';
+      setPerformanceError(message);
+      setCampaignsError(message);
+      setAnnouncementsError(message);
+    } finally {
+      setRefreshing(false);
+    }
+  }
+  useEffect(() => {
+  if (Platform.OS !== 'web' || !user || typeof document === 'undefined') return;
+
+  let startY = 0;
+  let startX = 0;
+  let scrollElement = null;
+  let triggered = false;
+
+  const root = document.documentElement;
+  const body = document.body;
+  const oldRootOverscroll = root.style.overscrollBehaviorY;
+  const oldBodyOverscroll = body.style.overscrollBehaviorY;
+
+  root.style.overscrollBehaviorY = 'none';
+  body.style.overscrollBehaviorY = 'none';
+
+  function findScrollElement(target) {
+    let element = target;
+    let fallback = null;
+
+    while (
+      element &&
+      element !== document.body &&
+      element !== document.documentElement
+    ) {
+      const style = window.getComputedStyle(element);
+      const canScroll = element.scrollHeight > element.clientHeight + 1;
+      const overflow = `${style.overflowY} ${style.overflow}`;
+
+      if (canScroll) {
+        if (!fallback) fallback = element;
+
+        if (/(auto|scroll|overlay)/i.test(overflow)) {
+          return element;
+        }
+      }
+
+      element = element.parentElement;
+    }
+
+    return fallback || document.scrollingElement || root;
+  }
+
+  function onTouchStart(event) {
+    if (event.touches.length !== 1) {
+      scrollElement = null;
+      return;
+    }
+
+    startY = event.touches[0].clientY;
+    startX = event.touches[0].clientX;
+    scrollElement = findScrollElement(event.target);
+    triggered = false;
+  }
+
+  function onTouchMove(event) {
+    if (!scrollElement || event.touches.length !== 1 || triggered || refreshing) {
+      return;
+    }
+
+    const deltaY = event.touches[0].clientY - startY;
+    const deltaX = event.touches[0].clientX - startX;
+
+    // Do not interfere with horizontal swipes.
+    if (Math.abs(deltaX) > Math.abs(deltaY)) return;
+
+    const atTop = scrollElement.scrollTop <= 1;
+
+    // Stop the browser's own pull-to-refresh when the app is already at the top.
+    if (deltaY > 0 && atTop && event.cancelable) {
+      event.preventDefault();
+    }
+
+    if (deltaY >= 75 && atTop) {
+      triggered = true;
+      handleRefresh();
+    }
+  }
+
+  function onTouchEnd() {
+    startY = 0;
+    startX = 0;
+    scrollElement = null;
+    triggered = false;
+  }
+
+  document.addEventListener('touchstart', onTouchStart, {
+    passive: true,
+    capture: true,
+  });
+  document.addEventListener('touchmove', onTouchMove, {
+    passive: false,
+    capture: true,
+  });
+  document.addEventListener('touchend', onTouchEnd, true);
+  document.addEventListener('touchcancel', onTouchEnd, true);
+
+  return () => {
+    document.removeEventListener('touchstart', onTouchStart, true);
+    document.removeEventListener('touchmove', onTouchMove, true);
+    document.removeEventListener('touchend', onTouchEnd, true);
+    document.removeEventListener('touchcancel', onTouchEnd, true);
+
+    root.style.overscrollBehaviorY = oldRootOverscroll;
+    body.style.overscrollBehaviorY = oldBodyOverscroll;
+  };
+}, [user, refreshing]);
   async function handleEnableNotifications() {
     if (Platform.OS !== 'web') {
       setNotificationError('Push notifications are currently available through the VEYRA web app.');
@@ -1686,6 +1859,8 @@ export default function App() {
   const screens = {
     Home: (
       <HomeScreen
+        refreshing={refreshing}
+        onRefresh={handleRefresh}
         performance={performance}
         performanceLoading={performanceLoading}
         performanceError={performanceError}
@@ -1696,6 +1871,8 @@ export default function App() {
 
     Analytics: (
       <AnalyticsScreen
+        refreshing={refreshing}
+        onRefresh={handleRefresh}
         performance={performance}
         performanceLoading={performanceLoading}
         performanceError={performanceError}
@@ -1705,6 +1882,8 @@ export default function App() {
 
     Goals: (
       <GoalsScreen
+        refreshing={refreshing}
+        onRefresh={handleRefresh}
         performance={performance}
         performanceLoading={performanceLoading}
         performanceError={performanceError}
@@ -1714,6 +1893,8 @@ export default function App() {
 
     Events: (
       <EventsScreen
+        refreshing={refreshing}
+        onRefresh={handleRefresh}
         user={user}
         campaigns={campaigns}
         campaignsLoading={campaignsLoading}
@@ -1726,6 +1907,8 @@ export default function App() {
 
     Profile: (
       <ProfileScreen
+        refreshing={refreshing}
+        onRefresh={handleRefresh}
         email={user.email}
         username={user.username}
         displayName={user.display_name}
@@ -2802,11 +2985,3 @@ authLogo: {
     height: 25,
   },
 }); 
-
-
-
-
-
-
-
-
