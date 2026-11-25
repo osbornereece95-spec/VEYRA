@@ -1,4 +1,4 @@
-
+﻿
 
 import os
 import json
@@ -810,6 +810,16 @@ def management_create_campaign(
         campaign_id = row["id"]
         _replace_management_campaign_creators(db, campaign_id, creator_ids)
 
+    if data.status == "active" and creator_ids:
+        send_creator_push_notifications(
+            creator_ids,
+            "campaigns",
+            f"campaign-published-{campaign_id}",
+            "New campaign available",
+            f"You have been assigned to {name}.",
+            "/"
+        )
+
     return {
         "message": "Campaign created successfully",
         "campaign_id": campaign_id
@@ -865,12 +875,22 @@ def management_update_campaign(
 
     with connect_db() as db:
         existing = db.execute(
-            "SELECT id FROM management_campaigns WHERE id = %s FOR UPDATE",
+            "SELECT id, status FROM management_campaigns WHERE id = %s FOR UPDATE",
             (campaign_id,)
         ).fetchone()
 
         if not existing:
             raise HTTPException(status_code=404, detail="Campaign not found")
+
+        old_creator_rows = db.execute(
+            """
+            SELECT user_id
+            FROM management_campaign_creators
+            WHERE campaign_id = %s
+            """,
+            (campaign_id,)
+        ).fetchall()
+        old_creator_ids = {row["user_id"] for row in old_creator_rows}
 
         db.execute(
             """
@@ -900,6 +920,28 @@ def management_update_campaign(
 
         _replace_management_campaign_creators(db, campaign_id, creator_ids)
 
+    if data.status == "active":
+        if existing["status"] != "active":
+            send_creator_push_notifications(
+                creator_ids,
+                "campaigns",
+                f"campaign-activated-{campaign_id}",
+                "New campaign available",
+                f"{name} is now active and available to you.",
+                "/"
+            )
+        else:
+            newly_assigned = set(creator_ids) - old_creator_ids
+            for creator_id in newly_assigned:
+                send_creator_push_notifications(
+                    [creator_id],
+                    "campaigns",
+                    f"campaign-assigned-{campaign_id}-{creator_id}",
+                    "New campaign assignment",
+                    f"You have been assigned to {name}.",
+                    "/"
+                )
+
     return {
         "message": "Campaign updated successfully",
         "campaign_id": campaign_id
@@ -919,14 +961,36 @@ def management_replace_campaign_creators(
 
     with connect_db() as db:
         existing = db.execute(
-            "SELECT id FROM management_campaigns WHERE id = %s FOR UPDATE",
+            "SELECT id, status FROM management_campaigns WHERE id = %s FOR UPDATE",
             (campaign_id,)
         ).fetchone()
 
         if not existing:
             raise HTTPException(status_code=404, detail="Campaign not found")
 
+        old_creator_rows = db.execute(
+            """
+            SELECT user_id
+            FROM management_campaign_creators
+            WHERE campaign_id = %s
+            """,
+            (campaign_id,)
+        ).fetchall()
+        old_creator_ids = {row["user_id"] for row in old_creator_rows}
+
         _replace_management_campaign_creators(db, campaign_id, creator_ids)
+
+    if existing["status"] == "active":
+        newly_assigned = set(creator_ids) - old_creator_ids
+        for creator_id in newly_assigned:
+            send_creator_push_notifications(
+                [creator_id],
+                "campaigns",
+                f"campaign-assigned-{campaign_id}-{creator_id}",
+                "New campaign assignment",
+                "You have been assigned to a new campaign.",
+                "/"
+            )
 
     return {
         "message": "Campaign creator assignments updated",
@@ -1009,6 +1073,387 @@ def validate_management_announcement(data):
     return title, message, status
 
 
+
+# ============================================================
+# VEYRA WEB PUSH NOTIFICATIONS
+# ============================================================
+
+NOTIFICATION_CATEGORIES = (
+    "campaigns",
+    "announcements",
+    "reminders",
+    "account",
+)
+
+
+class NotificationPreferencesRequest(BaseModel):
+    campaigns: bool = True
+    announcements: bool = True
+    reminders: bool = True
+    account: bool = True
+
+
+class NotificationSubscriptionRequest(BaseModel):
+    endpoint: str = Field(min_length=1, max_length=3000)
+    keys: dict = Field()
+
+
+class NotificationUnsubscribeRequest(BaseModel):
+    endpoint: str = Field(min_length=1, max_length=3000)
+
+
+def ensure_notifications_tables(db):
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS notification_preferences (
+            user_id BIGINT PRIMARY KEY,
+            campaigns BOOLEAN NOT NULL DEFAULT TRUE,
+            announcements BOOLEAN NOT NULL DEFAULT TRUE,
+            reminders BOOLEAN NOT NULL DEFAULT TRUE,
+            account BOOLEAN NOT NULL DEFAULT TRUE,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id BIGSERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            endpoint TEXT NOT NULL UNIQUE,
+            key_p256dh TEXT NOT NULL,
+            key_auth TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+
+    db.execute("""
+        CREATE INDEX IF NOT EXISTS push_subscriptions_user_idx
+        ON push_subscriptions(user_id)
+    """)
+
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS notification_deliveries (
+            id BIGSERIAL PRIMARY KEY,
+            event_key TEXT NOT NULL,
+            subscription_id BIGINT NOT NULL
+                REFERENCES push_subscriptions(id) ON DELETE CASCADE,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE(event_key, subscription_id)
+        )
+    """)
+
+
+def send_creator_push_notifications(
+    user_ids,
+    category,
+    event_key,
+    title,
+    message,
+    target_url="/"
+):
+    if category not in NOTIFICATION_CATEGORIES:
+        logger.error("Rejected invalid notification category")
+        return
+
+    private_key = os.getenv("VAPID_PRIVATE_KEY")
+    subject = os.getenv("VAPID_SUBJECT", "mailto:support@veyra.app")
+
+    if not private_key:
+        logger.warning("Push delivery skipped: VAPID_PRIVATE_KEY is not configured")
+        return
+
+    try:
+        from pywebpush import webpush, WebPushException
+    except ImportError:
+        logger.exception("Push delivery skipped: pywebpush is unavailable")
+        return
+
+    for user_id in set(user_ids):
+        with connect_db() as db:
+            ensure_notifications_tables(db)
+
+            preference = db.execute(
+                f"SELECT {category} FROM notification_preferences WHERE user_id = %s",
+                (user_id,)
+            ).fetchone()
+
+            if preference and not preference[category]:
+                continue
+
+            subscriptions = db.execute(
+                """
+                SELECT id, endpoint, key_p256dh, key_auth
+                FROM push_subscriptions
+                WHERE user_id = %s
+                """,
+                (user_id,)
+            ).fetchall()
+
+            for subscription in subscriptions:
+                reservation = db.execute(
+                    """
+                    INSERT INTO notification_deliveries (
+                        event_key, subscription_id, status
+                    )
+                    VALUES (%s, %s, 'pending')
+                    ON CONFLICT (event_key, subscription_id)
+                    DO UPDATE SET
+                        status = 'pending',
+                        updated_at = NOW()
+                    WHERE notification_deliveries.status = 'failed'
+                    RETURNING id
+                    """,
+                    (event_key, subscription["id"])
+                ).fetchone()
+
+                if not reservation:
+                    continue
+
+                try:
+                    webpush(
+                        subscription_info={
+                            "endpoint": subscription["endpoint"],
+                            "keys": {
+                                "p256dh": subscription["key_p256dh"],
+                                "auth": subscription["key_auth"],
+                            },
+                        },
+                        data=json.dumps({
+                            "title": title,
+                            "body": message,
+                            "category": category,
+                            "url": (
+                                target_url
+                                if target_url and target_url != "/"
+                                else "/?veyra_tab=Events"
+                                if category in ("campaigns", "announcements")
+                                else "/?veyra_tab=Profile"
+                            ),
+                            "tag": event_key,
+                        }),
+                        vapid_private_key=private_key,
+                        vapid_claims={"sub": subject},
+                    )
+
+                    db.execute(
+                        """
+                        UPDATE notification_deliveries
+                        SET status = 'sent', updated_at = NOW()
+                        WHERE id = %s
+                        """,
+                        (reservation["id"],)
+                    )
+
+                except WebPushException as exc:
+                    status_code = getattr(
+                        getattr(exc, "response", None),
+                        "status_code",
+                        None
+                    )
+
+                    if status_code in (404, 410):
+                        db.execute(
+                            "DELETE FROM push_subscriptions WHERE id = %s",
+                            (subscription["id"],)
+                        )
+                    else:
+                        logger.warning(
+                            "Push delivery failed for subscription %s",
+                            subscription["id"]
+                        )
+                        db.execute(
+                            """
+                            UPDATE notification_deliveries
+                            SET status = 'failed', updated_at = NOW()
+                            WHERE id = %s
+                            """,
+                            (reservation["id"],)
+                        )
+
+                except Exception:
+                    logger.exception(
+                        "Unexpected push delivery failure for subscription %s",
+                        subscription["id"]
+                    )
+                    db.execute(
+                        """
+                        UPDATE notification_deliveries
+                        SET status = 'failed', updated_at = NOW()
+                        WHERE id = %s
+                        """,
+                        (reservation["id"],)
+                    )
+
+
+@app.get("/notifications/public-key")
+def notification_public_key(user=Depends(get_current_user)):
+    public_key = os.getenv("VAPID_PUBLIC_KEY")
+
+    if not public_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Notifications are not configured yet"
+        )
+
+    return {"public_key": public_key}
+
+
+@app.get("/notifications/preferences")
+def get_notification_preferences(user=Depends(get_current_user)):
+    with connect_db() as db:
+        ensure_notifications_tables(db)
+
+        db.execute(
+            """
+            INSERT INTO notification_preferences (user_id)
+            VALUES (%s)
+            ON CONFLICT (user_id) DO NOTHING
+            """,
+            (user["id"],)
+        )
+
+        preferences = db.execute(
+            """
+            SELECT campaigns, announcements, reminders, account
+            FROM notification_preferences
+            WHERE user_id = %s
+            """,
+            (user["id"],)
+        ).fetchone()
+
+        subscription = db.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM push_subscriptions
+            WHERE user_id = %s
+            """,
+            (user["id"],)
+        ).fetchone()
+
+    return {
+        "preferences": dict(preferences),
+        "subscribed": subscription["total"] > 0,
+        "subscription_count": subscription["total"],
+    }
+
+
+@app.put("/notifications/preferences")
+def update_notification_preferences(
+    data: NotificationPreferencesRequest,
+    user=Depends(get_current_user)
+):
+    with connect_db() as db:
+        ensure_notifications_tables(db)
+
+        db.execute(
+            """
+            INSERT INTO notification_preferences (
+                user_id, campaigns, announcements, reminders, account
+            )
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET
+                campaigns = EXCLUDED.campaigns,
+                announcements = EXCLUDED.announcements,
+                reminders = EXCLUDED.reminders,
+                account = EXCLUDED.account,
+                updated_at = NOW()
+            """,
+            (
+                user["id"],
+                data.campaigns,
+                data.announcements,
+                data.reminders,
+                data.account,
+            )
+        )
+
+    return {
+        "message": "Notification preferences saved",
+        "preferences": data.model_dump(),
+    }
+
+
+@app.post("/notifications/subscribe")
+def subscribe_to_notifications(
+    data: NotificationSubscriptionRequest,
+    user=Depends(get_current_user)
+):
+    endpoint = data.endpoint.strip()
+    keys = data.keys
+
+    if not endpoint.startswith("https://"):
+        raise HTTPException(status_code=422, detail="Invalid push endpoint")
+
+    p256dh = keys.get("p256dh")
+    auth = keys.get("auth")
+
+    if not isinstance(p256dh, str) or not isinstance(auth, str):
+        raise HTTPException(status_code=422, detail="Invalid subscription keys")
+
+    if not p256dh or not auth or len(p256dh) > 500 or len(auth) > 500:
+        raise HTTPException(status_code=422, detail="Invalid subscription keys")
+
+    with connect_db() as db:
+        ensure_notifications_tables(db)
+
+        db.execute(
+            """
+            INSERT INTO push_subscriptions (
+                user_id, endpoint, key_p256dh, key_auth
+            )
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (endpoint) DO UPDATE SET
+                user_id = EXCLUDED.user_id,
+                key_p256dh = EXCLUDED.key_p256dh,
+                key_auth = EXCLUDED.key_auth,
+                updated_at = NOW()
+            """,
+            (user["id"], endpoint, p256dh, auth)
+        )
+
+        db.execute(
+            """
+            INSERT INTO notification_preferences (user_id)
+            VALUES (%s)
+            ON CONFLICT (user_id) DO NOTHING
+            """,
+            (user["id"],)
+        )
+
+    return {"message": "Notifications enabled successfully"}
+
+
+@app.delete("/notifications/subscribe")
+def unsubscribe_from_notifications(
+    data: NotificationUnsubscribeRequest,
+    user=Depends(get_current_user)
+):
+    with connect_db() as db:
+        ensure_notifications_tables(db)
+
+        db.execute(
+            """
+            DELETE FROM push_subscriptions
+            WHERE user_id = %s AND endpoint = %s
+            """,
+            (user["id"], data.endpoint.strip())
+        )
+
+        remaining = db.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM push_subscriptions
+            WHERE user_id = %s
+            """,
+            (user["id"],)
+        ).fetchone()
+
+    return {
+        "message": "Device notification subscription removed",
+        "remaining_devices": remaining["total"],
+    }
 @app.get("/management/announcements")
 def management_list_announcements(
     founder=Depends(get_management_founder)
@@ -1054,6 +1499,29 @@ def management_create_announcement(
             (title, message, status, founder["email"], status)
         ).fetchone()
 
+        subscribed_user_rows = []
+        if status == "published":
+            subscribed_user_rows = db.execute(
+                """
+                SELECT DISTINCT user_id
+                FROM push_subscriptions
+                """
+            ).fetchall()
+
+        subscribed_user_ids = [
+            row["user_id"] for row in subscribed_user_rows
+        ]
+
+    if status == "published":
+        send_creator_push_notifications(
+            subscribed_user_ids,
+            "announcements",
+            f"announcement-published-{announcement['id']}",
+            announcement["title"],
+            announcement["message"][:250],
+            "/"
+        )
+
     return {
         "message": "Announcement created successfully",
         "announcement": dict(announcement)
@@ -1083,6 +1551,10 @@ def management_update_announcement(
         if not existing:
             raise HTTPException(status_code=404, detail="Announcement not found")
 
+        newly_published = (
+            existing["published_at"] is None and status == "published"
+        )
+
         announcement = db.execute(
             """
             UPDATE management_announcements
@@ -1102,6 +1574,29 @@ def management_update_announcement(
             """,
             (title, message, status, status, announcement_id)
         ).fetchone()
+
+        subscribed_user_ids = []
+        if newly_published:
+            subscribed_user_rows = db.execute(
+                """
+                SELECT DISTINCT user_id
+                FROM push_subscriptions
+                """
+            ).fetchall()
+
+            subscribed_user_ids = [
+                row["user_id"] for row in subscribed_user_rows
+            ]
+
+    if newly_published:
+        send_creator_push_notifications(
+            subscribed_user_ids,
+            "announcements",
+            f"announcement-published-{announcement['id']}",
+            announcement["title"],
+            announcement["message"][:250],
+            "/"
+        )
 
     return {
         "message": "Announcement updated successfully",
@@ -1265,7 +1760,7 @@ def admin_update_username(
 
     with connect_db() as db:
         existing_user = db.execute(
-            "SELECT id FROM users WHERE id = %s",
+            "SELECT id, username FROM users WHERE id = %s",
             (user_id,)
         ).fetchone()
 
@@ -1310,6 +1805,20 @@ def admin_update_username(
             """,
             (user_id,)
         ).fetchone()
+
+    if existing_user["username"] != username:
+        try:
+            import uuid
+            send_creator_push_notifications(
+                [user_id],
+                "account",
+                f"account-username-updated-{user_id}-{uuid.uuid4().hex}",
+                "Account details updated",
+                f"Your TikTok username has been updated to @{username}.",
+                target_url="/?veyra_tab=Profile",
+            )
+        except Exception as exc:
+            print(f"VEYRA account notification failed: {exc}")
 
     return {
         "message": "TikTok username updated successfully",
@@ -2004,7 +2513,7 @@ def update_my_profile(
     if not display_name or len(display_name) > 50:
         raise HTTPException(
             status_code=400,
-            detail="Display name must be 1â€“50 characters"
+            detail="Display name must be 1Ã¢â‚¬â€œ50 characters"
         )
 
     with connect_db() as db:
@@ -2352,4 +2861,36 @@ def post_discord_invite_message(
             detail="Could not connect to Discord"
         )
 
+
+
+
+
+@app.post("/internal/notifications/run-reminders")
+def trigger_campaign_reminders(authorization: str = Header(default="")):
+    expected_secret = os.getenv("VEYRA_REMINDER_TRIGGER_SECRET", "")
+    supplied_secret = authorization.removeprefix("Bearer ").strip()
+
+    if not expected_secret:
+        raise HTTPException(
+            status_code=503,
+            detail="Reminder trigger is not configured"
+        )
+
+    if not secrets.compare_digest(supplied_secret, expected_secret):
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorised reminder trigger"
+        )
+
+    try:
+        from send_campaign_reminders import run_campaign_reminders
+        run_campaign_reminders()
+    except Exception:
+        logger.exception("Scheduled VEYRA campaign reminders failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Campaign reminders could not be completed"
+        )
+
+    return {"message": "Campaign reminders completed successfully"}
 

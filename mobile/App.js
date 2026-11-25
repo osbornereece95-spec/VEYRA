@@ -13,6 +13,8 @@ import {
    ActivityIndicator,
   Image,
   Platform,
+  Switch,
+  Modal,
 } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import * as ImagePicker from 'expo-image-picker';
@@ -936,6 +938,12 @@ function ProfileScreen({
   onSave,
   onUploadPicture,
   onLogout,
+  notificationPreferences,
+  notificationSubscribed,
+  notificationBusy,
+  notificationError,
+  onEnableNotifications,
+  onToggleNotification,
 }) {
   const [newDisplayName, setNewDisplayName] = useState(
     displayName || username || ''
@@ -1071,6 +1079,70 @@ function ProfileScreen({
       </View>
 
       
+      <SectionHeading title="NOTIFICATIONS" />
+
+      <View style={styles.infoCard}>
+        <Text style={{ color: C.white, fontSize: 14, fontWeight: '700', marginBottom: 7 }}>
+          Push notifications
+        </Text>
+        <Text style={{ color: C.muted, fontSize: 12, lineHeight: 19, marginBottom: 13 }}>
+          Receive important VEYRA updates on this device. You can choose which updates you receive below.
+        </Text>
+
+        {notificationSubscribed ? (
+          <Text style={{ color: '#8DD6A5', fontSize: 12, marginBottom: 13 }}>
+            Notifications are enabled on this device.
+          </Text>
+        ) : (
+          <Button
+            title={notificationBusy ? 'PLEASE WAIT...' : 'ENABLE NOTIFICATIONS'}
+            onPress={onEnableNotifications}
+            disabled={notificationBusy}
+          />
+        )}
+
+        {notificationError ? (
+          <Text style={{ color: '#F0A0A0', fontSize: 12, lineHeight: 18, marginTop: 10 }}>
+            {notificationError}
+          </Text>
+        ) : null}
+
+        {[
+          ['campaigns', 'Campaigns', 'New campaign assignments and opportunities'],
+          ['announcements', 'Announcements', 'News and updates from VEYRA'],
+          ['reminders', 'Reminders', 'Important reminders and deadlines'],
+          ['account', 'Account', 'Important account-related updates'],
+        ].map(([key, label, description]) => (
+          <View
+            key={key}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              paddingVertical: 12,
+              borderTopWidth: 1,
+              borderTopColor: 'rgba(255,255,255,0.09)',
+            }}
+          >
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <Text style={{ color: C.white, fontSize: 13, fontWeight: '600' }}>
+                {label}
+              </Text>
+              <Text style={{ color: C.muted, fontSize: 11, marginTop: 4 }}>
+                {description}
+              </Text>
+            </View>
+            <Switch
+              value={notificationPreferences[key] !== false}
+              onValueChange={(value) => onToggleNotification(key, value)}
+              disabled={notificationBusy}
+              trackColor={{ false: '#555555', true: '#8DD6A5' }}
+              thumbColor="#FFFFFF"
+            />
+          </View>
+        ))}
+      </View>
+
       <Button title="SIGN OUT" secondary onPress={onLogout} />
 
       <Text style={styles.authFooter}>
@@ -1099,6 +1171,18 @@ export default function App() {
   const [announcements, setAnnouncements] = useState([]);
   const [announcementsLoading, setAnnouncementsLoading] = useState(false);
   const [announcementsError, setAnnouncementsError] = useState('');
+
+  const [notificationPreferences, setNotificationPreferences] = useState({
+    campaigns: true,
+    announcements: true,
+    reminders: true,
+    account: true,
+  });
+  const [notificationSubscribed, setNotificationSubscribed] = useState(false);
+  const [notificationBusy, setNotificationBusy] = useState(false);
+  const [notificationError, setNotificationError] = useState('');
+  const [notificationPromptVisible, setNotificationPromptVisible] = useState(false);
+  const [notificationPromptMessage, setNotificationPromptMessage] = useState('');
 
   useEffect(() => {
     async function restoreSession() {
@@ -1260,6 +1344,226 @@ export default function App() {
   }, [user]);
 
  
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadNotificationSettings() {
+      if (!user || Platform.OS !== 'web') {
+        setNotificationSubscribed(false);
+        return;
+      }
+
+      try {
+        const token = await getStoredToken();
+        if (!token) return;
+
+        const result = await apiRequest(
+          '/notifications/preferences',
+          'GET',
+          null,
+          token
+        );
+
+        if (cancelled) return;
+
+        setNotificationPreferences({
+          campaigns: result.preferences?.campaigns !== false,
+          announcements: result.preferences?.announcements !== false,
+          reminders: result.preferences?.reminders !== false,
+          account: result.preferences?.account !== false,
+        });
+        setNotificationSubscribed(Boolean(result.subscribed));
+
+        if (!('Notification' in window) ||
+            !('serviceWorker' in navigator) ||
+            !('PushManager' in window)) {
+          setNotificationError(
+            'Push notifications are not supported by this browser. Try installing VEYRA as a web app or use a supported browser.'
+          );
+          return;
+        }
+
+        if (Notification.permission === 'denied') {
+          setNotificationError(
+            'Notifications are blocked by your browser. Change VEYRA notification permissions in your browser settings to enable them.'
+          );
+          return;
+        }
+
+        if (result.subscribed) return;
+
+        const promptKey = `veyra_notification_prompt_${user.id}`;
+        const saved = localStorage.getItem(promptKey);
+        const promptState = saved ? JSON.parse(saved) : {};
+
+        if (promptState.enabled || promptState.denied) return;
+
+        if (!promptState.remindAt || Date.now() >= promptState.remindAt) {
+          setNotificationPromptVisible(true);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setNotificationError(error.message || 'Unable to load notification settings.');
+        }
+      }
+    }
+
+    loadNotificationSettings();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+
+    const requestedTab = new URLSearchParams(window.location.search).get('veyra_tab');
+
+    if (requestedTab === 'Events' || requestedTab === 'Profile') {
+      setActiveTab(requestedTab);
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, []);
+
+  async function handleEnableNotifications() {
+    if (Platform.OS !== 'web') {
+      setNotificationError('Push notifications are currently available through the VEYRA web app.');
+      return;
+    }
+
+    if (!('Notification' in window) ||
+        !('serviceWorker' in navigator) ||
+        !('PushManager' in window)) {
+      setNotificationError('This browser does not support web push notifications.');
+      setNotificationPromptVisible(false);
+      return;
+    }
+
+    const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
+      navigator.standalone === true;
+
+    if (isIOS && !isStandalone) {
+      setNotificationPromptMessage(
+        'On iPhone or iPad, first add VEYRA to your Home Screen using Safari?s Share button, then open VEYRA from the new Home Screen icon and enable notifications.'
+      );
+      return;
+    }
+
+    setNotificationBusy(true);
+    setNotificationError('');
+    setNotificationPromptMessage('');
+
+    try {
+      const permission = await Notification.requestPermission();
+
+      if (permission !== 'granted') {
+        if (permission === 'denied') {
+          localStorage.setItem(
+            `veyra_notification_prompt_${user.id}`,
+            JSON.stringify({ denied: true })
+          );
+          setNotificationError(
+            'Notifications are blocked. Open your browser settings, find VEYRA, and allow notifications.'
+          );
+        } else {
+          setNotificationError('Notification permission was not granted. You can enable it later in Profile settings.');
+        }
+        setNotificationPromptVisible(false);
+        return;
+      }
+
+      const token = await getStoredToken();
+      if (!token) throw new Error('Please sign in again before enabling notifications.');
+
+      const keyResult = await apiRequest(
+        '/notifications/public-key',
+        'GET',
+        null,
+        token
+      );
+
+      const publicKey = keyResult.public_key;
+      const padding = '='.repeat((4 - publicKey.length % 4) % 4);
+      const base64 = (publicKey + padding).replace(/-/g, '+').replace(/_/g, '/');
+      const raw = window.atob(base64);
+      const applicationServerKey = Uint8Array.from(raw, char => char.charCodeAt(0));
+
+      const registration = await navigator.serviceWorker.ready;
+      let subscription = await registration.pushManager.getSubscription();
+
+      if (!subscription) {
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey,
+        });
+      }
+
+      await apiRequest(
+        '/notifications/subscribe',
+        'POST',
+        subscription.toJSON(),
+        token
+      );
+
+      localStorage.setItem(
+        `veyra_notification_prompt_${user.id}`,
+        JSON.stringify({ enabled: true })
+      );
+
+      setNotificationSubscribed(true);
+      setNotificationPromptVisible(false);
+      setNotificationPromptMessage('');
+      setNotificationError('');
+    } catch (error) {
+      setNotificationError(error.message || 'Unable to enable notifications. Please try again.');
+    } finally {
+      setNotificationBusy(false);
+    }
+  }
+
+  async function handleToggleNotification(category, value) {
+    const updated = {
+      ...notificationPreferences,
+      [category]: value,
+    };
+
+    setNotificationPreferences(updated);
+    setNotificationBusy(true);
+    setNotificationError('');
+
+    try {
+      const token = await getStoredToken();
+      if (!token) throw new Error('Please sign in again.');
+
+      const result = await apiRequest(
+        '/notifications/preferences',
+        'PUT',
+        updated,
+        token
+      );
+
+      setNotificationPreferences(result.preferences || updated);
+    } catch (error) {
+      setNotificationPreferences(notificationPreferences);
+      setNotificationError(error.message || 'Unable to save notification preferences.');
+    } finally {
+      setNotificationBusy(false);
+    }
+  }
+
+  function handleNotificationLater() {
+    if (user && Platform.OS === 'web') {
+      localStorage.setItem(
+        `veyra_notification_prompt_${user.id}`,
+        JSON.stringify({ remindAt: Date.now() + 7 * 24 * 60 * 60 * 1000 })
+      );
+    }
+    setNotificationPromptVisible(false);
+    setNotificationPromptMessage('');
+  }
+
   async function handleRegister(username, invitationCode) {
     setAuthLoading(true);
 
@@ -1429,6 +1733,12 @@ export default function App() {
         onSave={handleSaveProfile}
         onUploadPicture={handleUploadPicture}
         onLogout={handleLogout}
+        notificationPreferences={notificationPreferences}
+        notificationSubscribed={notificationSubscribed}
+        notificationBusy={notificationBusy}
+        notificationError={notificationError}
+        onEnableNotifications={handleEnableNotifications}
+        onToggleNotification={handleToggleNotification}
       />
     ),
   };
@@ -1475,6 +1785,72 @@ export default function App() {
           })}
         </View>
       </View>
+
+      <Modal
+        visible={notificationPromptVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={handleNotificationLater}
+      >
+        <View style={{
+          flex: 1,
+          backgroundColor: 'rgba(0,0,0,0.82)',
+          justifyContent: 'center',
+          padding: 24,
+        }}>
+          <View style={{
+            backgroundColor: '#171717',
+            borderColor: 'rgba(255,255,255,0.16)',
+            borderWidth: 1,
+            borderRadius: 18,
+            padding: 24,
+          }}>
+            <Text style={{ color: C.white, fontSize: 21, fontWeight: '800', marginBottom: 12 }}>
+              Stay in the loop
+            </Text>
+            <Text style={{ color: C.muted, fontSize: 14, lineHeight: 22, marginBottom: 18 }}>
+              Enable VEYRA notifications for campaign opportunities, announcements and important creator updates. You can manage each category in Profile settings.
+            </Text>
+
+            {notificationPromptMessage ? (
+              <Text style={{ color: '#F0C98B', fontSize: 12, lineHeight: 19, marginBottom: 14 }}>
+                {notificationPromptMessage}
+              </Text>
+            ) : null}
+
+            {notificationError ? (
+              <Text style={{ color: '#F0A0A0', fontSize: 12, lineHeight: 19, marginBottom: 14 }}>
+                {notificationError}
+              </Text>
+            ) : null}
+
+            <TouchableOpacity
+              onPress={handleEnableNotifications}
+              disabled={notificationBusy}
+              style={{
+                backgroundColor: '#FFFFFF',
+                borderRadius: 9,
+                paddingVertical: 14,
+                alignItems: 'center',
+                marginBottom: 10,
+              }}
+            >
+              <Text style={{ color: '#080808', fontWeight: '800', fontSize: 12 }}>
+                {notificationBusy ? 'PLEASE WAIT...' : 'ENABLE NOTIFICATIONS'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={handleNotificationLater}
+              style={{ paddingVertical: 11, alignItems: 'center' }}
+            >
+              <Text style={{ color: C.muted, fontWeight: '600', fontSize: 12 }}>
+                MAYBE LATER
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }

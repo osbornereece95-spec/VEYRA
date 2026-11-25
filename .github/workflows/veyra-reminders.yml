@@ -1,0 +1,27 @@
+﻿name: VEYRA Daily Campaign Reminders
+
+on:
+  schedule:
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  send-reminders:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger VEYRA campaign reminders
+        env:
+          REMINDER_SECRET: ${{ secrets.VEYRA_REMINDER_TRIGGER_SECRET }}
+        run: |
+          if [ -z "$REMINDER_SECRET" ]; then
+            echo "Reminder secret is not configured."
+            exit 1
+          fi
+
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --url "https://veyra-api-r8eq.onrender.com/internal/notifications/run-reminders" \
+            --header "Authorization: Bearer $REMINDER_SECRET"

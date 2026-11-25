@@ -9,3 +9,5 @@ python-multipart==0.0.34
 psycopg[binary]==3.2.10
 
 PyNaCl==1.5.0
+
+pywebpush==2.0.3
