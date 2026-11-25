@@ -1,4 +1,4 @@
-
+﻿
 
 import os
 import json
@@ -16,7 +16,7 @@ import urllib.parse
 import urllib.request
 from urllib.error import HTTPError, URLError
 from pathlib import Path
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import jwt
 from dotenv import load_dotenv
@@ -57,6 +57,20 @@ app.add_middleware(
 )
 
 password_hash = PasswordHash.recommended()
+
+MANAGEMENT_FOUNDER_EMAIL = os.getenv(
+    "MANAGEMENT_FOUNDER_EMAIL", ""
+).strip().lower()
+
+MANAGEMENT_FOUNDER_PASSWORD = os.getenv(
+    "MANAGEMENT_FOUNDER_PASSWORD", ""
+)
+
+MANAGEMENT_FOUNDER_PASSWORD_HASH = (
+    password_hash.hash(MANAGEMENT_FOUNDER_PASSWORD)
+    if MANAGEMENT_FOUNDER_PASSWORD
+    else None
+)
 security = HTTPBearer()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -190,12 +204,29 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class ManagementLoginRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=1, max_length=1024)
+
+
 class ProfileUpdateRequest(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=50)
 
 
 class AdminUsernameUpdateRequest(BaseModel):
     username: str = Field(min_length=1, max_length=50)
+
+
+
+class ManagementCampaignRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    description: str = Field(default="", max_length=10000)
+    objective: str = Field(default="", max_length=5000)
+    notes: str = Field(default="", max_length=10000)
+    start_date: date | None = None
+    end_date: date | None = None
+    status: str = Field(default="draft", max_length=20)
+    creator_ids: list[int] = Field(default_factory=list)
 
 
 def hash_invitation(code: str) -> str:
@@ -293,6 +324,105 @@ def get_current_user(
         )
 
     return dict(user)
+
+
+def get_management_founder(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    try:
+        payload = jwt.decode(
+            credentials.credentials,
+            SECRET_KEY,
+            algorithms=["HS256"]
+        )
+
+        if payload.get("typ") != "management":
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid management login"
+            )
+
+        email = str(payload["sub"]).strip().lower()
+
+    except (jwt.InvalidTokenError, KeyError, ValueError):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired management login"
+        )
+
+    if (
+        not MANAGEMENT_FOUNDER_EMAIL
+        or not secrets.compare_digest(
+            email, MANAGEMENT_FOUNDER_EMAIL
+        )
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Founder access denied"
+        )
+
+    return {"email": email}
+
+
+@app.post("/management/auth/login")
+def management_login(data: ManagementLoginRequest):
+    if (
+        not MANAGEMENT_FOUNDER_EMAIL
+        or not MANAGEMENT_FOUNDER_PASSWORD_HASH
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="Founder login is not configured"
+        )
+
+    submitted_email = data.email.strip().lower()
+
+    email_matches = secrets.compare_digest(
+        submitted_email,
+        MANAGEMENT_FOUNDER_EMAIL
+    )
+
+    password_matches = password_hash.verify(
+        data.password,
+        MANAGEMENT_FOUNDER_PASSWORD_HASH
+    )
+
+    if not email_matches or not password_matches:
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect email or password"
+        )
+
+    now = datetime.now(timezone.utc)
+
+    token = jwt.encode(
+        {
+            "sub": MANAGEMENT_FOUNDER_EMAIL,
+            "typ": "management",
+            "iat": now,
+            "exp": now + timedelta(hours=12),
+        },
+        SECRET_KEY,
+        algorithm="HS256"
+    )
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "founder": {
+            "email": MANAGEMENT_FOUNDER_EMAIL
+        }
+    }
+
+
+@app.get("/management/auth/me")
+def management_me(
+    founder=Depends(get_management_founder)
+):
+    return {
+        "authenticated": True,
+        "founder": founder
+    }
 
 
 def check_admin(x_admin_key: str = Header(...)):
@@ -534,6 +664,369 @@ async def discord_interactions(
 
 
 
+
+
+MANAGEMENT_CAMPAIGN_STATUSES = {
+    "draft",
+    "scheduled",
+    "active",
+    "completed",
+    "cancelled",
+}
+
+
+def _validate_management_campaign(data):
+    name = data.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Campaign name is required")
+
+    if data.status not in MANAGEMENT_CAMPAIGN_STATUSES:
+        raise HTTPException(status_code=422, detail="Invalid campaign status")
+
+    if data.start_date and data.end_date and data.end_date < data.start_date:
+        raise HTTPException(
+            status_code=422,
+            detail="Campaign end date cannot be before its start date"
+        )
+
+    creator_ids = list(dict.fromkeys(data.creator_ids))
+    if any(user_id <= 0 for user_id in creator_ids):
+        raise HTTPException(status_code=422, detail="Invalid creator ID")
+
+    return name, creator_ids
+
+
+def _replace_management_campaign_creators(db, campaign_id, creator_ids):
+    if not creator_ids:
+        db.execute(
+            "DELETE FROM management_campaign_creators WHERE campaign_id = %s",
+            (campaign_id,)
+        )
+        return
+
+    found = db.execute(
+        "SELECT id FROM users WHERE id = ANY(%s)",
+        (creator_ids,)
+    ).fetchall()
+
+    found_ids = {row["id"] for row in found}
+    missing_ids = [user_id for user_id in creator_ids if user_id not in found_ids]
+
+    if missing_ids:
+        raise HTTPException(
+            status_code=404,
+            detail={"message": "One or more creators were not found", "creator_ids": missing_ids}
+        )
+
+    db.execute(
+        "DELETE FROM management_campaign_creators WHERE campaign_id = %s",
+        (campaign_id,)
+    )
+
+    db.executemany(
+        """
+        INSERT INTO management_campaign_creators (campaign_id, user_id)
+        VALUES (%s, %s)
+        """,
+        [(campaign_id, user_id) for user_id in creator_ids]
+    )
+
+
+@app.get("/management/campaigns")
+def management_list_campaigns(
+    founder=Depends(get_management_founder)
+):
+    with connect_db() as db:
+        campaigns = db.execute(
+            """
+            SELECT
+                c.id,
+                c.name,
+                c.description,
+                c.objective,
+                c.notes,
+                c.start_date,
+                c.end_date,
+                c.status,
+                c.campaign_type,
+                c.backstage_status,
+                c.created_by,
+                c.created_at,
+                c.updated_at,
+                COUNT(cc.user_id)::INTEGER AS creator_count,
+                COALESCE(
+                    array_agg(cc.user_id) FILTER (WHERE cc.user_id IS NOT NULL),
+                    ARRAY[]::BIGINT[]
+                ) AS creator_ids
+            FROM management_campaigns c
+            LEFT JOIN management_campaign_creators cc
+                ON cc.campaign_id = c.id
+            GROUP BY c.id
+            ORDER BY c.updated_at DESC, c.id DESC
+            """
+        ).fetchall()
+
+    return {
+        "total": len(campaigns),
+        "campaigns": [dict(campaign) for campaign in campaigns]
+    }
+
+
+@app.post("/management/campaigns", status_code=201)
+def management_create_campaign(
+    data: ManagementCampaignRequest,
+    founder=Depends(get_management_founder)
+):
+    name, creator_ids = _validate_management_campaign(data)
+
+    with connect_db() as db:
+        row = db.execute(
+            """
+            INSERT INTO management_campaigns (
+                name, description, objective, notes,
+                start_date, end_date, status, created_by
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (
+                name,
+                data.description,
+                data.objective,
+                data.notes,
+                data.start_date,
+                data.end_date,
+                data.status,
+                founder["email"]
+            )
+        ).fetchone()
+
+        campaign_id = row["id"]
+        _replace_management_campaign_creators(db, campaign_id, creator_ids)
+
+    return {
+        "message": "Campaign created successfully",
+        "campaign_id": campaign_id
+    }
+
+
+@app.get("/management/campaigns/{campaign_id}")
+def management_get_campaign(
+    campaign_id: int,
+    founder=Depends(get_management_founder)
+):
+    with connect_db() as db:
+        campaign = db.execute(
+            """
+            SELECT
+                id, name, description, objective, notes,
+                start_date, end_date, status,
+                campaign_type, backstage_status, created_by,
+                created_at, updated_at
+            FROM management_campaigns
+            WHERE id = %s
+            """,
+            (campaign_id,)
+        ).fetchone()
+
+        if not campaign:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+
+        creators = db.execute(
+            """
+            SELECT u.id, u.username, u.display_name, u.email, u.profile_picture
+            FROM management_campaign_creators cc
+            JOIN users u ON u.id = cc.user_id
+            WHERE cc.campaign_id = %s
+            ORDER BY u.username
+            """,
+            (campaign_id,)
+        ).fetchall()
+
+    return {
+        "campaign": dict(campaign),
+        "creators": [dict(creator) for creator in creators]
+    }
+
+
+@app.put("/management/campaigns/{campaign_id}")
+def management_update_campaign(
+    campaign_id: int,
+    data: ManagementCampaignRequest,
+    founder=Depends(get_management_founder)
+):
+    name, creator_ids = _validate_management_campaign(data)
+
+    with connect_db() as db:
+        existing = db.execute(
+            "SELECT id FROM management_campaigns WHERE id = %s FOR UPDATE",
+            (campaign_id,)
+        ).fetchone()
+
+        if not existing:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+
+        db.execute(
+            """
+            UPDATE management_campaigns
+            SET
+                name = %s,
+                description = %s,
+                objective = %s,
+                notes = %s,
+                start_date = %s,
+                end_date = %s,
+                status = %s,
+                updated_at = NOW()
+            WHERE id = %s
+            """,
+            (
+                name,
+                data.description,
+                data.objective,
+                data.notes,
+                data.start_date,
+                data.end_date,
+                data.status,
+                campaign_id
+            )
+        )
+
+        _replace_management_campaign_creators(db, campaign_id, creator_ids)
+
+    return {
+        "message": "Campaign updated successfully",
+        "campaign_id": campaign_id
+    }
+
+
+@app.put("/management/campaigns/{campaign_id}/creators")
+def management_replace_campaign_creators(
+    campaign_id: int,
+    creator_ids: list[int],
+    founder=Depends(get_management_founder)
+):
+    creator_ids = list(dict.fromkeys(creator_ids))
+
+    if any(user_id <= 0 for user_id in creator_ids):
+        raise HTTPException(status_code=422, detail="Invalid creator ID")
+
+    with connect_db() as db:
+        existing = db.execute(
+            "SELECT id FROM management_campaigns WHERE id = %s FOR UPDATE",
+            (campaign_id,)
+        ).fetchone()
+
+        if not existing:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+
+        _replace_management_campaign_creators(db, campaign_id, creator_ids)
+
+    return {
+        "message": "Campaign creator assignments updated",
+        "campaign_id": campaign_id,
+        "assigned_creators": len(creator_ids)
+    }
+
+
+@app.get("/management/creators")
+def management_list_creators(
+    founder=Depends(get_management_founder)
+):
+    with connect_db() as db:
+        creators = db.execute(
+            """
+            SELECT
+                u.id,
+                u.email,
+                u.username,
+                u.display_name,
+                u.profile_picture,
+                p.followers,
+                p.videos,
+                p.likes,
+                p.diamonds_l30d,
+                p.valid_live_days_l30d,
+                p.live_duration_l30d,
+                p.imported_at
+            FROM users u
+            LEFT JOIN backstage_performance p
+                ON p.normalised_username = lower(ltrim(u.username, '@'))
+            ORDER BY u.id DESC
+            """
+        ).fetchall()
+
+    return {
+        "total": len(creators),
+        "creators": [dict(creator) for creator in creators]
+    }
+
+@app.get("/management/performance")
+def management_performance(
+    founder=Depends(get_management_founder)
+):
+    with connect_db() as db:
+        rows = db.execute(
+            """
+            SELECT
+                u.id,
+                u.email,
+                u.username,
+                u.display_name,
+                p.followers,
+                p.videos,
+                p.likes,
+                p.diamonds_l30d,
+                p.valid_live_days_l30d,
+                p.live_duration_l30d,
+                p.diamonds_from_fan_club_l30d,
+                p.active_fan_club_members_l30d,
+                p.last_live,
+                p.tier_status,
+                p.tier_last_month,
+                p.achieved_star_creator,
+                p.star_creator_days_this_month,
+                p.imported_at
+            FROM users u
+            LEFT JOIN backstage_performance p
+                ON p.normalised_username = lower(ltrim(u.username, '@'))
+            ORDER BY u.id DESC
+            """
+        ).fetchall()
+
+    creators = [dict(row) for row in rows]
+
+    metric_fields = (
+        "followers",
+        "videos",
+        "likes",
+        "diamonds_l30d",
+        "valid_live_days_l30d",
+        "live_duration_l30d",
+        "diamonds_from_fan_club_l30d",
+        "active_fan_club_members_l30d",
+    )
+
+    totals = {
+        field: sum(
+            (creator.get(field) or 0) for creator in creators
+        )
+        for field in metric_fields
+    }
+
+    with_performance = sum(
+        1 for creator in creators
+        if creator.get("imported_at") is not None
+    )
+
+    return {
+        "total_creators": len(creators),
+        "creators_with_performance": with_performance,
+        "creators_without_performance": len(creators) - with_performance,
+        "totals": totals,
+        "creators": creators,
+    }
+
 @app.get("/admin/users")
 def admin_list_users(admin=Depends(check_admin)):
     with connect_db() as db:
@@ -621,11 +1114,7 @@ def admin_update_username(
     }
 
 
-@app.post("/admin/import-backstage")
-async def import_backstage(
-    file: UploadFile = File(...),
-    admin=Depends(check_admin)
-):
+async def _process_backstage_import(file: UploadFile):
     if not file.filename or not file.filename.lower().endswith(".xlsx"):
         raise HTTPException(
             status_code=400,
@@ -934,6 +1423,252 @@ async def import_backstage(
     }
 
 
+@app.post("/admin/import-backstage")
+async def import_backstage(
+    file: UploadFile = File(...),
+    admin=Depends(check_admin)
+):
+    return await _process_backstage_import(file)
+
+
+
+
+def _backstage_campaign_date(value):
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if value is None:
+        return None
+
+    match = re.match(r"^\s*(\d{4}-\d{1,2}-\d{1,2})", str(value))
+    if not match:
+        return None
+
+    try:
+        return date.fromisoformat(match.group(1))
+    except ValueError:
+        return None
+
+
+async def _process_backstage_campaign_import(file: UploadFile):
+    filename = (file.filename or "").lower()
+    if not filename.endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="Please upload an .xlsx Excel file.")
+
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="The uploaded Excel file is empty.")
+    if len(contents) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="The Excel file must be 10 MB or smaller.")
+
+    try:
+        workbook = load_workbook(io.BytesIO(contents), read_only=True, data_only=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Unable to read this Excel workbook.")
+
+    required = [
+        "name",
+        "campaign type",
+        "start time",
+        "end time",
+        "status",
+        "created by",
+    ]
+
+    selected = None
+    best_rank = (-1, -1)
+
+    try:
+        for worksheet in workbook.worksheets:
+            sheet_rows = list(worksheet.iter_rows(values_only=True))
+
+            for header_index, candidate in enumerate(sheet_rows[:20]):
+                candidate_headers = list(candidate)
+                candidate_positions = {
+                    normalise_heading(value): index
+                    for index, value in enumerate(candidate_headers)
+                    if value is not None and str(value).strip()
+                }
+
+                score = sum(1 for heading in required if heading in candidate_positions)
+                candidate_data = sheet_rows[header_index + 1:]
+                data_count = sum(
+                    1 for row in candidate_data
+                    if any(value is not None and str(value).strip() for value in row)
+                )
+                rank = (score, data_count)
+
+                if rank > best_rank:
+                    best_rank = rank
+                    selected = (
+                        worksheet.title,
+                        candidate_headers,
+                        candidate_positions,
+                        candidate_data,
+                    )
+    finally:
+        workbook.close()
+
+    if selected is None or best_rank[0] < 1:
+        raise HTTPException(
+            status_code=400,
+            detail="No campaign header row could be found in the workbook."
+        )
+
+    sheet_name, headers, positions, rows = selected
+
+    if not rows:
+        raise HTTPException(status_code=400, detail="IMPORT DIAGNOSTIC - sheet=" + repr(sheet_name) + "; headers=" + repr(headers) + "; rows=" + str(len(rows)) + "; sample=" + repr(rows[:5]) + "")
+
+    missing = [heading for heading in required if heading not in positions]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing required Excel columns: " + ", ".join(missing) + ". Headers detected: " + repr(list(positions.keys())) + ". First five rows: " + repr(rows[:5]),
+        )
+
+    def cell(row, heading):
+        index = positions[heading]
+        return row[index] if index < len(row) else None
+
+    def display_value(value):
+        if value is None:
+            return ""
+        if isinstance(value, (datetime, date)):
+            return value.isoformat()
+        return str(value).strip()
+
+    prepared = []
+    for row_number, row in enumerate(rows, start=2):
+        if not any(value is not None and str(value).strip() for value in row):
+            continue
+
+        name = display_value(cell(row, "name"))
+        if not name:
+            continue
+
+        raw_data = {}
+        for index, heading in enumerate(headers):
+            if heading is None or not str(heading).strip():
+                continue
+            value = row[index] if index < len(row) else None
+            raw_data[str(heading).strip()] = (
+                value.isoformat() if isinstance(value, (datetime, date))
+                else value
+            )
+
+        source_status = display_value(cell(row, "status"))
+        status_key = source_status.casefold()
+        internal_status = {
+            "declined": "cancelled",
+            "ended": "completed",
+            "active": "active",
+            "scheduled": "scheduled",
+            "upcoming": "scheduled",
+        }.get(status_key, "draft")
+
+        start_date = _backstage_campaign_date(cell(row, "start time"))
+        end_date = _backstage_campaign_date(cell(row, "end time"))
+
+        if start_date and end_date and end_date < start_date:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Row {row_number}: the end date is before the start date.",
+            )
+
+        prepared.append({
+            "name": name,
+            "campaign_type": display_value(cell(row, "campaign type")),
+            "start_date": start_date,
+            "end_date": end_date,
+            "status": internal_status,
+            "backstage_status": source_status,
+            "created_by": display_value(cell(row, "created by")) or None,
+            "backstage_data": json.dumps(raw_data, ensure_ascii=False, default=str),
+        })
+
+    if not prepared:
+        raise HTTPException(status_code=400, detail="No campaign rows were found in the workbook.")
+
+    imported = 0
+    skipped_duplicates = 0
+    campaign_ids = []
+
+    with connect_db() as db:
+        db.execute(
+            """
+            ALTER TABLE management_campaigns
+                ADD COLUMN IF NOT EXISTS campaign_type TEXT NOT NULL DEFAULT '',
+                ADD COLUMN IF NOT EXISTS backstage_status TEXT NOT NULL DEFAULT '',
+                ADD COLUMN IF NOT EXISTS backstage_data JSONB NOT NULL DEFAULT '{}'::jsonb
+            """
+        )
+
+        for campaign in prepared:
+            existing = db.execute(
+                """
+                SELECT id
+                FROM management_campaigns
+                WHERE name = %s
+                  AND backstage_data = %s::jsonb
+                LIMIT 1
+                """,
+                (campaign["name"], campaign["backstage_data"]),
+            ).fetchone()
+
+            if existing:
+                skipped_duplicates += 1
+                continue
+
+            inserted = db.execute(
+                """
+                INSERT INTO management_campaigns (
+                    name, description, objective, notes,
+                    start_date, end_date, status, created_by,
+                    campaign_type, backstage_status, backstage_data
+                )
+                VALUES (%s, '', '', '', %s, %s, %s, %s, %s, %s, %s::jsonb)
+                RETURNING id
+                """,
+                (
+                    campaign["name"],
+                    campaign["start_date"],
+                    campaign["end_date"],
+                    campaign["status"],
+                    campaign["created_by"],
+                    campaign["campaign_type"],
+                    campaign["backstage_status"],
+                    campaign["backstage_data"],
+                ),
+            ).fetchone()
+
+            imported += 1
+            campaign_ids.append(inserted["id"])
+
+    return {
+        "imported": imported,
+        "skipped_duplicates": skipped_duplicates,
+        "campaign_ids": campaign_ids,
+    }
+
+
+@app.post("/management/import-campaigns")
+async def management_import_campaigns(
+    file: UploadFile = File(...),
+    founder=Depends(get_management_founder)
+):
+    return await _process_backstage_campaign_import(file)
+
+
+@app.post("/management/import-backstage")
+async def management_import_backstage(
+    file: UploadFile = File(...),
+    founder=Depends(get_management_founder)
+):
+    return await _process_backstage_import(file)
+
+
 @app.post("/auth/register")
 def register(data: RegisterRequest):
     username = data.username.strip().lstrip("@")
@@ -1065,7 +1800,7 @@ def update_my_profile(
     if not display_name or len(display_name) > 50:
         raise HTTPException(
             status_code=400,
-            detail="Display name must be 1–50 characters"
+            detail="Display name must be 1â€“50 characters"
         )
 
     with connect_db() as db:
@@ -1201,6 +1936,39 @@ def get_profile_picture(filename: str):
         url=public_url,
         status_code=302
     )
+
+
+@app.get("/campaigns")
+def creator_list_campaigns(user=Depends(get_current_user)):
+    with connect_db() as db:
+        campaigns = db.execute(
+            """
+            SELECT
+                id,
+                name,
+                campaign_type,
+                start_date,
+                end_date,
+                status,
+                backstage_status
+            FROM management_campaigns
+            WHERE backstage_data <> '{}'::jsonb
+            ORDER BY start_date DESC NULLS LAST, id DESC
+            """
+        ).fetchall()
+
+    results = []
+    for campaign in campaigns:
+        item = dict(campaign)
+        item["display_status"] = (
+            item.get("backstage_status") or item.get("status") or "Unknown"
+        )
+        results.append(item)
+
+    return {
+        "total": len(results),
+        "campaigns": results
+    }
 
 
 @app.get("/my-performance")
@@ -1360,3 +2128,5 @@ def post_discord_invite_message(
             status_code=502,
             detail="Could not connect to Discord"
         )
+
+

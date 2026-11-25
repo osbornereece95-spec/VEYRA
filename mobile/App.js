@@ -795,7 +795,7 @@ function GoalsScreen({
   );
 }
 
-function EventsScreen({ user }) {
+function EventsScreen({ user, campaigns, campaignsLoading, campaignsError }) {
   return (
     <ScrollView
       showsVerticalScrollIndicator={false}
@@ -823,15 +823,54 @@ function EventsScreen({ user }) {
 
       <SectionHeading title="YOUR OPPORTUNITIES" />
 
-      <View style={styles.infoCard}>
-        <View style={styles.comingSoonRow}>
-          <Text style={styles.infoTitle}>Campaigns</Text>
-          <Text style={styles.comingSoon}>COMING SOON</Text>
-        </View>
+      <View style={styles.comingSoonRow}>
+        <Text style={styles.infoTitle}>CAMPAIGNS</Text>
         <Text style={styles.muted}>
-          Creator campaigns and network opportunities will appear here.
+          {campaigns.length} {campaigns.length === 1 ? 'CAMPAIGN' : 'CAMPAIGNS'}
         </Text>
       </View>
+
+      {campaignsLoading ? (
+        <View style={styles.infoCard}>
+          <ActivityIndicator color={C.white} size="small" />
+          <Text style={styles.muted}>Loading campaigns...</Text>
+        </View>
+      ) : campaignsError ? (
+        <View style={styles.infoCard}>
+          <Text style={styles.infoTitle}>Campaigns unavailable</Text>
+          <Text style={styles.muted}>{campaignsError}</Text>
+        </View>
+      ) : campaigns.length === 0 ? (
+        <View style={styles.infoCard}>
+          <Text style={styles.infoTitle}>No campaigns yet</Text>
+          <Text style={styles.muted}>
+            Creator campaigns and network opportunities will appear here when they are published.
+          </Text>
+        </View>
+      ) : (
+        campaigns.map((campaign) => (
+          <View style={styles.infoCard} key={String(campaign.id)}>
+            <View style={styles.comingSoonRow}>
+              <Text style={styles.infoTitle}>
+                {campaign.name || 'Untitled campaign'}
+              </Text>
+              <Text style={styles.comingSoon}>
+                {(campaign.display_status || 'UNKNOWN').toUpperCase()}
+              </Text>
+            </View>
+            {!!campaign.campaign_type && (
+              <Text style={styles.muted}>{campaign.campaign_type}</Text>
+            )}
+            {(campaign.start_date || campaign.end_date) && (
+              <Text style={styles.muted}>
+                {campaign.start_date ? String(campaign.start_date).slice(0, 10) : 'Date TBC'}
+                {'  ?  '}
+                {campaign.end_date ? String(campaign.end_date).slice(0, 10) : 'Date TBC'}
+              </Text>
+            )}
+          </View>
+        ))
+      )}
 
       <View style={styles.infoCard}>
         <View style={styles.comingSoonRow}>
@@ -1023,6 +1062,9 @@ export default function App() {
   const [performance, setPerformance] = useState(null);
   const [performanceLoading, setPerformanceLoading] = useState(false);
   const [performanceError, setPerformanceError] = useState('');
+  const [campaigns, setCampaigns] = useState([]);
+  const [campaignsLoading, setCampaignsLoading] = useState(false);
+  const [campaignsError, setCampaignsError] = useState('');
 
   useEffect(() => {
     async function restoreSession() {
@@ -1042,6 +1084,53 @@ export default function App() {
 
     restoreSession();
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadCampaigns() {
+      if (!user) {
+        setCampaigns([]);
+        setCampaignsError('');
+        setCampaignsLoading(false);
+        return;
+      }
+
+      setCampaignsLoading(true);
+      setCampaignsError('');
+
+      try {
+        const token = await getStoredToken();
+
+        if (!token) {
+          throw new Error('Please sign in again to load campaigns.');
+        }
+
+        const result = await apiRequest('/campaigns', 'GET', null, token);
+
+        if (!cancelled) {
+          setCampaigns(
+            Array.isArray(result.campaigns) ? result.campaigns : []
+          );
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setCampaigns([]);
+          setCampaignsError(error.message);
+        }
+      } finally {
+        if (!cancelled) {
+          setCampaignsLoading(false);
+        }
+      }
+    }
+
+    loadCampaigns();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1176,6 +1265,8 @@ export default function App() {
     setUser(null);
     setPerformance(null);
     setPerformanceError('');
+    setCampaigns([]);
+    setCampaignsError('');
     setActiveTab('Home');
   }
 
@@ -1235,7 +1326,14 @@ export default function App() {
       />
     ),
 
-    Events: <EventsScreen user={user} />,
+    Events: (
+      <EventsScreen
+        user={user}
+        campaigns={campaigns}
+        campaignsLoading={campaignsLoading}
+        campaignsError={campaignsError}
+      />
+    ),
 
     Profile: (
       <ProfileScreen
