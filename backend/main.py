@@ -1,4 +1,4 @@
-﻿
+
 
 import os
 import json
@@ -227,6 +227,12 @@ class ManagementCampaignRequest(BaseModel):
     end_date: date | None = None
     status: str = Field(default="draft", max_length=20)
     creator_ids: list[int] = Field(default_factory=list)
+
+
+class ManagementAnnouncementRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=160)
+    message: str = Field(min_length=1, max_length=5000)
+    status: str = Field(default="draft", max_length=20)
 
 
 def hash_invitation(code: str) -> str:
@@ -928,6 +934,204 @@ def management_replace_campaign_creators(
         "assigned_creators": len(creator_ids)
     }
 
+
+@app.delete("/management/campaigns/{campaign_id}")
+def management_delete_campaign(
+    campaign_id: int,
+    founder=Depends(get_management_founder)
+):
+    with connect_db() as db:
+        existing = db.execute(
+            "SELECT id FROM management_campaigns WHERE id = %s FOR UPDATE",
+            (campaign_id,)
+        ).fetchone()
+
+        if not existing:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+
+        db.execute(
+            "DELETE FROM management_campaign_creators WHERE campaign_id = %s",
+            (campaign_id,)
+        )
+
+        db.execute(
+            "DELETE FROM management_campaigns WHERE id = %s",
+            (campaign_id,)
+        )
+
+    return {
+        "message": "Campaign permanently deleted",
+        "campaign_id": campaign_id
+    }
+
+
+
+def ensure_management_announcements_table(db):
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS management_announcements (
+            id BIGSERIAL PRIMARY KEY,
+            title TEXT NOT NULL,
+            message TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'draft'
+                CHECK (status IN ('draft', 'published')),
+            created_by TEXT,
+            published_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE INDEX IF NOT EXISTS
+            management_announcements_status_published_idx
+        ON management_announcements (status, published_at DESC)
+        """
+    )
+
+
+def validate_management_announcement(data):
+    title = data.title.strip()
+    message = data.message.strip()
+    status = data.status.strip().lower()
+
+    if not title:
+        raise HTTPException(status_code=422, detail="Announcement title is required")
+    if not message:
+        raise HTTPException(status_code=422, detail="Announcement message is required")
+    if status not in ("draft", "published"):
+        raise HTTPException(
+            status_code=422,
+            detail="Announcement status must be draft or published"
+        )
+
+    return title, message, status
+
+
+@app.get("/management/announcements")
+def management_list_announcements(
+    founder=Depends(get_management_founder)
+):
+    with connect_db() as db:
+        ensure_management_announcements_table(db)
+        announcements = db.execute(
+            """
+            SELECT id, title, message, status, created_by,
+                   published_at, created_at, updated_at
+            FROM management_announcements
+            ORDER BY updated_at DESC, id DESC
+            """
+        ).fetchall()
+
+    return {
+        "total": len(announcements),
+        "announcements": [dict(item) for item in announcements]
+    }
+
+
+@app.post("/management/announcements", status_code=201)
+def management_create_announcement(
+    data: ManagementAnnouncementRequest,
+    founder=Depends(get_management_founder)
+):
+    title, message, status = validate_management_announcement(data)
+
+    with connect_db() as db:
+        ensure_management_announcements_table(db)
+        announcement = db.execute(
+            """
+            INSERT INTO management_announcements (
+                title, message, status, created_by, published_at
+            )
+            VALUES (
+                %s, %s, %s, %s,
+                CASE WHEN %s = 'published' THEN NOW() ELSE NULL END
+            )
+            RETURNING id, title, message, status, created_by,
+                      published_at, created_at, updated_at
+            """,
+            (title, message, status, founder["email"], status)
+        ).fetchone()
+
+    return {
+        "message": "Announcement created successfully",
+        "announcement": dict(announcement)
+    }
+
+
+@app.put("/management/announcements/{announcement_id}")
+def management_update_announcement(
+    announcement_id: int,
+    data: ManagementAnnouncementRequest,
+    founder=Depends(get_management_founder)
+):
+    title, message, status = validate_management_announcement(data)
+
+    with connect_db() as db:
+        ensure_management_announcements_table(db)
+        existing = db.execute(
+            """
+            SELECT id, published_at
+            FROM management_announcements
+            WHERE id = %s
+            FOR UPDATE
+            """,
+            (announcement_id,)
+        ).fetchone()
+
+        if not existing:
+            raise HTTPException(status_code=404, detail="Announcement not found")
+
+        announcement = db.execute(
+            """
+            UPDATE management_announcements
+            SET
+                title = %s,
+                message = %s,
+                status = %s,
+                published_at = CASE
+                    WHEN %s = 'draft' THEN NULL
+                    WHEN published_at IS NULL THEN NOW()
+                    ELSE published_at
+                END,
+                updated_at = NOW()
+            WHERE id = %s
+            RETURNING id, title, message, status, created_by,
+                      published_at, created_at, updated_at
+            """,
+            (title, message, status, status, announcement_id)
+        ).fetchone()
+
+    return {
+        "message": "Announcement updated successfully",
+        "announcement": dict(announcement)
+    }
+
+
+@app.delete("/management/announcements/{announcement_id}")
+def management_delete_announcement(
+    announcement_id: int,
+    founder=Depends(get_management_founder)
+):
+    with connect_db() as db:
+        ensure_management_announcements_table(db)
+        deleted = db.execute(
+            """
+            DELETE FROM management_announcements
+            WHERE id = %s
+            RETURNING id
+            """,
+            (announcement_id,)
+        ).fetchone()
+
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Announcement not found")
+
+    return {
+        "message": "Announcement permanently deleted",
+        "announcement_id": announcement_id
+    }
 
 @app.get("/management/creators")
 def management_list_creators(
@@ -1936,6 +2140,25 @@ def get_profile_picture(filename: str):
         url=public_url,
         status_code=302
     )
+
+
+@app.get("/announcements")
+def creator_list_announcements(user=Depends(get_current_user)):
+    with connect_db() as db:
+        ensure_management_announcements_table(db)
+        announcements = db.execute(
+            """
+            SELECT id, title, message, published_at
+            FROM management_announcements
+            WHERE status = 'published'
+            ORDER BY published_at DESC NULLS LAST, id DESC
+            """
+        ).fetchall()
+
+    return {
+        "total": len(announcements),
+        "announcements": [dict(item) for item in announcements]
+    }
 
 
 @app.get("/campaigns")
