@@ -101,3 +101,288 @@
   .campaign-card-actions { flex-direction: column; align-items: stretch; }
   .campaign-card-actions button { justify-content: center; }
 }
+
+/* VEYRA responsive campaign refinement */
+.campaigns-module {
+  width: 100%;
+  min-width: 0;
+  gap: 22px;
+}
+
+.campaigns-summary {
+  gap: 14px;
+}
+
+.campaigns-summary-card {
+  min-width: 0;
+  padding: 19px;
+  border-radius: 12px;
+}
+
+.campaigns-summary-card span {
+  font-size: 11px;
+}
+
+.campaigns-summary-card strong {
+  font-size: clamp(22px, 2vw, 28px);
+}
+
+.campaigns-heading {
+  gap: 18px;
+}
+
+.campaigns-heading h2 {
+  font-size: 15px;
+}
+
+.campaigns-heading p {
+  font-size: 11px;
+}
+
+.campaigns-toolbar {
+  gap: 14px;
+}
+
+.campaigns-search {
+  min-height: 42px;
+  height: auto;
+  border-radius: 10px;
+  border-color: rgba(255,255,255,.1);
+  background: rgba(255,255,255,.025);
+}
+
+.campaigns-search:focus-within {
+  border-color: rgba(184,161,255,.55);
+  box-shadow: 0 0 0 3px rgba(184,161,255,.08);
+}
+
+.campaigns-search input {
+  font-size: 13px;
+}
+
+.campaign-card {
+  padding: 20px 4px;
+  gap: 18px;
+}
+
+.campaign-card-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 11px;
+  color: #d9ccff;
+  background: rgba(184,161,255,.09);
+  border-color: rgba(184,161,255,.16);
+}
+
+.campaign-card-title h3 {
+  font-size: 13px;
+}
+
+.campaign-card-copy > p {
+  max-width: 760px;
+  font-size: 11px;
+}
+
+.campaign-card-meta {
+  gap: 16px;
+}
+
+.campaign-card-meta span {
+  font-size: 10px;
+}
+
+.campaign-edit-button,
+.campaign-delete-button {
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-size: 11px;
+}
+
+.campaign-editor-backdrop {
+  padding: 20px;
+  backdrop-filter: blur(7px);
+}
+
+.campaign-editor {
+  width: min(700px, 100%);
+  max-height: min(850px, calc(100dvh - 40px));
+  padding: clamp(18px, 3vw, 28px);
+  border-radius: 14px;
+}
+
+.campaign-editor-heading h2 {
+  font-size: 23px;
+}
+
+.campaign-editor form {
+  gap: 17px;
+}
+
+.campaign-editor form > label,
+.campaign-form-grid label {
+  font-size: 11px;
+}
+
+.campaign-editor input:not([type="checkbox"]),
+.campaign-editor textarea,
+.campaign-editor select {
+  min-height: 42px;
+  padding: 11px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.campaign-editor textarea {
+  min-height: 100px;
+}
+
+.campaign-form-grid {
+  gap: 15px;
+}
+
+.campaign-creator-section {
+  padding: 15px;
+  border-radius: 10px;
+}
+
+.campaign-creator-list {
+  gap: 9px;
+  max-height: 210px;
+}
+
+.campaign-creator-option {
+  padding: 11px;
+  border-radius: 8px;
+}
+
+.campaign-creator-option strong {
+  font-size: 10px;
+}
+
+.campaign-creator-option small {
+  font-size: 9px;
+}
+
+.campaign-cancel-button,
+.campaign-editor-actions .primary-button {
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+@media (max-width: 900px) {
+  .campaigns-summary-card {
+    padding: 16px;
+  }
+
+  .campaign-card {
+    gap: 12px;
+  }
+}
+
+@media (max-width: 700px) {
+  .campaigns-module {
+    gap: 18px;
+  }
+
+  .campaigns-heading {
+    align-items: flex-start;
+  }
+
+  .campaigns-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .campaigns-search {
+    width: 100%;
+  }
+
+  .campaigns-toolbar > span {
+    text-align: right;
+  }
+
+  .campaign-card {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 18px 0;
+  }
+
+  .campaign-card-main {
+    width: 100%;
+  }
+
+  .campaign-card-actions {
+    width: 100%;
+    flex-direction: row;
+    justify-content: flex-end;
+  }
+
+  .campaign-card-actions button {
+    justify-content: center;
+  }
+
+  .campaign-editor-backdrop {
+    align-items: flex-start;
+    padding: 10px;
+  }
+
+  .campaign-editor {
+    max-height: calc(100dvh - 20px);
+    margin: auto 0;
+  }
+}
+
+@media (max-width: 520px) {
+  .campaigns-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .campaigns-summary-card {
+    padding: 14px;
+  }
+
+  .campaigns-summary-card strong {
+    font-size: 22px;
+  }
+
+  .campaigns-heading-actions {
+    flex-wrap: wrap;
+    gap: 9px;
+  }
+
+  .campaign-card-actions {
+    justify-content: stretch;
+  }
+
+  .campaign-card-actions button {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .campaign-form-grid,
+  .campaign-creator-list {
+    grid-template-columns: 1fr;
+  }
+
+  .campaign-editor-actions {
+    flex-wrap: wrap;
+  }
+
+  .campaign-editor-actions button {
+    flex: 1;
+  }
+}
+
+@media (max-width: 360px) {
+  .campaigns-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .campaign-card-actions {
+    flex-direction: column;
+  }
+}

@@ -317,3 +317,256 @@
     flex-wrap: wrap;
   }
 }
+/* VEYRA management theme and responsive refinement */
+.announcements-dashboard {
+  width: 100%;
+  gap: 22px;
+  color: #eeeeF2;
+}
+
+.announcement-stat,
+.announcement-editor,
+.announcement-item {
+  color: #eeeeF2;
+  background: #111318;
+  border-color: rgba(255,255,255,.09);
+  box-shadow: 0 5px 18px rgba(0,0,0,.1);
+}
+
+.announcement-stat {
+  padding: 20px;
+  border-radius: 12px;
+}
+
+.announcement-stat span,
+.announcement-item-meta,
+.announcement-item-main small,
+.announcement-list-heading > span {
+  color: #9997a3;
+}
+
+.announcement-stat strong {
+  color: #f2eff8;
+  font-size: clamp(23px, 2vw, 29px);
+}
+
+.announcement-toolbar h2,
+.announcement-editor h3,
+.announcement-list-heading h3,
+.announcement-item h3 {
+  color: #f0eef5;
+}
+
+.announcement-toolbar h2 {
+  font-size: 18px;
+}
+
+.announcement-toolbar p,
+.announcement-empty p {
+  color: #9997a3;
+}
+
+.announcement-primary-button,
+.announcement-secondary-button,
+.announcement-danger-button,
+.announcement-icon-button {
+  min-height: 40px;
+  border-radius: 9px;
+  font-size: 12px;
+}
+
+.announcement-primary-button {
+  color: #17131f;
+  background: #c1adff;
+  border-color: #c1adff;
+}
+
+.announcement-primary-button:hover {
+  background: #d0c2ff;
+}
+
+.announcement-secondary-button,
+.announcement-icon-button {
+  color: #dedbe6;
+  background: #191a20;
+  border-color: rgba(255,255,255,.12);
+}
+
+.announcement-secondary-button:hover,
+.announcement-icon-button:hover {
+  background: #22232c;
+  border-color: rgba(184,161,255,.4);
+}
+
+.announcement-danger-button {
+  color: #f0a5a5;
+  background: rgba(220,90,90,.08);
+  border-color: rgba(220,90,90,.25);
+}
+
+.announcement-editor {
+  padding: clamp(17px, 2.5vw, 25px);
+  border-radius: 13px;
+  gap: 18px;
+}
+
+.announcement-eyebrow {
+  color: #b8a1ff;
+}
+
+.announcement-editor label {
+  color: #d7d4df;
+}
+
+.announcement-editor input,
+.announcement-editor textarea,
+.announcement-editor select {
+  color: #eeeeF2;
+  background: #0b0c10;
+  border-color: rgba(255,255,255,.12);
+  border-radius: 9px;
+  min-height: 42px;
+}
+
+.announcement-editor input:focus,
+.announcement-editor textarea:focus,
+.announcement-editor select:focus {
+  border-color: #b8a1ff;
+  box-shadow: 0 0 0 3px rgba(184,161,255,.08);
+}
+
+.announcement-editor label small {
+  color: #92909c;
+}
+
+.announcement-list-heading {
+  border-color: rgba(255,255,255,.09);
+}
+
+.announcement-item {
+  padding: 20px;
+  border-radius: 12px;
+  gap: 18px;
+  transition: border-color .2s, background .2s;
+}
+
+.announcement-item:hover {
+  border-color: rgba(184,161,255,.22);
+  background: #14151b;
+}
+
+.announcement-item h3 {
+  font-size: 15px;
+}
+
+.announcement-item-main p {
+  color: #aaa7b2;
+}
+
+.announcement-status.published {
+  color: #a9dfc0;
+  background: rgba(55,150,95,.13);
+}
+
+.announcement-status.draft {
+  color: #e4c78f;
+  background: rgba(190,145,55,.13);
+}
+
+.announcement-alert-error {
+  color: #f0aaaa;
+  background: rgba(220,90,90,.09);
+  border-color: rgba(220,90,90,.2);
+}
+
+.announcement-alert-success {
+  color: #a9dfc0;
+  background: rgba(55,150,95,.09);
+  border-color: rgba(55,150,95,.2);
+}
+
+.announcement-empty {
+  border-color: rgba(255,255,255,.14);
+  color: #9997a3;
+}
+
+.announcement-empty h3 {
+  color: #eeeeF2;
+}
+
+@media (max-width: 900px) {
+  .announcement-overview {
+    gap: 11px;
+  }
+
+  .announcement-stat {
+    padding: 16px;
+  }
+
+  .announcement-item {
+    padding: 17px;
+  }
+}
+
+@media (max-width: 720px) {
+  .announcement-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .announcement-toolbar {
+    align-items: flex-start;
+    gap: 14px;
+  }
+
+  .announcement-toolbar-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .announcement-item {
+    gap: 14px;
+  }
+
+  .announcement-item-actions {
+    width: 100%;
+  }
+
+  .announcement-editor-actions {
+    justify-content: stretch;
+  }
+
+  .announcement-editor-actions button {
+    flex: 1;
+  }
+}
+
+@media (max-width: 420px) {
+  .announcement-overview {
+    grid-template-columns: 1fr;
+  }
+
+  .announcement-stat {
+    padding: 15px;
+  }
+
+  .announcement-item {
+    padding: 15px;
+  }
+
+  .announcement-toolbar-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .announcement-toolbar-actions button {
+    width: 100%;
+  }
+
+  .announcement-editor-actions {
+    flex-direction: column-reverse;
+  }
+
+  .announcement-editor-actions button {
+    width: 100%;
+  }
+}
