@@ -795,7 +795,7 @@ function GoalsScreen({
   );
 }
 
-function EventsScreen({ user, campaigns, campaignsLoading, campaignsError }) {
+function EventsScreen({ user, campaigns, campaignsLoading, campaignsError, announcements, announcementsLoading, announcementsError }) {
   return (
     <ScrollView
       showsVerticalScrollIndicator={false}
@@ -882,15 +882,46 @@ function EventsScreen({ user, campaigns, campaignsLoading, campaignsError }) {
         </Text>
       </View>
 
-      <View style={styles.infoCard}>
-        <View style={styles.comingSoonRow}>
-          <Text style={styles.infoTitle}>Announcements</Text>
-          <Text style={styles.comingSoon}>COMING SOON</Text>
-        </View>
+      <View style={styles.comingSoonRow}>
+        <Text style={styles.infoTitle}>ANNOUNCEMENTS</Text>
         <Text style={styles.muted}>
-          Important news and updates from your network.
+          {announcements.length} {announcements.length === 1 ? 'UPDATE' : 'UPDATES'}
         </Text>
       </View>
+
+      {announcementsLoading ? (
+        <View style={styles.infoCard}>
+          <ActivityIndicator color={C.white} size="small" />
+          <Text style={styles.muted}>Loading announcements...</Text>
+        </View>
+      ) : announcementsError ? (
+        <View style={styles.infoCard}>
+          <Text style={styles.infoTitle}>Announcements unavailable</Text>
+          <Text style={styles.muted}>{announcementsError}</Text>
+        </View>
+      ) : announcements.length === 0 ? (
+        <View style={styles.infoCard}>
+          <Text style={styles.infoTitle}>No announcements yet</Text>
+          <Text style={styles.muted}>
+            Important news and updates from your network will appear here.
+          </Text>
+        </View>
+      ) : (
+        announcements.map((announcement) => (
+          <View
+            key={String(announcement.id)}
+            style={styles.infoCard}
+          >
+            <Text style={styles.infoTitle}>{announcement.title}</Text>
+            <Text style={styles.muted}>{announcement.message}</Text>
+            {announcement.published_at ? (
+              <Text style={styles.muted}>
+                {new Date(announcement.published_at).toLocaleDateString()}
+              </Text>
+            ) : null}
+          </View>
+        ))
+      )}
 
       <View style={styles.bottomSpace} />
     </ScrollView>
@@ -1065,6 +1096,9 @@ export default function App() {
   const [campaigns, setCampaigns] = useState([]);
   const [campaignsLoading, setCampaignsLoading] = useState(false);
   const [campaignsError, setCampaignsError] = useState('');
+  const [announcements, setAnnouncements] = useState([]);
+  const [announcementsLoading, setAnnouncementsLoading] = useState(false);
+  const [announcementsError, setAnnouncementsError] = useState('');
 
   useEffect(() => {
     async function restoreSession() {
@@ -1126,6 +1160,54 @@ export default function App() {
     }
 
     loadCampaigns();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadAnnouncements() {
+      if (!user) {
+        setAnnouncements([]);
+        setAnnouncementsError('');
+        setAnnouncementsLoading(false);
+        return;
+      }
+
+      setAnnouncementsLoading(true);
+      setAnnouncementsError('');
+
+      try {
+        const token = await getStoredToken();
+
+        if (!token) {
+          throw new Error('Please sign in again to load announcements.');
+        }
+
+        const result = await apiRequest('/announcements', 'GET', null, token);
+
+        if (!cancelled) {
+          setAnnouncements(
+            Array.isArray(result.announcements) ? result.announcements : []
+          );
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setAnnouncements([]);
+          setAnnouncementsError(
+            error?.message || 'Unable to load announcements.'
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setAnnouncementsLoading(false);
+        }
+      }
+    }
+
+    loadAnnouncements();
 
     return () => {
       cancelled = true;
@@ -1332,6 +1414,9 @@ export default function App() {
         campaigns={campaigns}
         campaignsLoading={campaignsLoading}
         campaignsError={campaignsError}
+        announcements={announcements}
+        announcementsLoading={announcementsLoading}
+        announcementsError={announcementsError}
       />
     ),
 
