@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   LayoutDashboard, Users, ChartNoAxesCombined, Megaphone,
-  CalendarDays, Ticket, FileBarChart, Activity, Settings,
+  Trophy, Ticket, FileBarChart, Activity, Settings,
   Bell, ChevronDown, ArrowUpRight,
   Plus, MoreHorizontal, Menu, X, Crown, ShieldCheck,
   CircleDollarSign, Radio, Clock3
@@ -12,6 +12,7 @@ import CreatorDirectory from './CreatorDirectory';
 import PerformanceDashboard from './PerformanceDashboard';
 import CampaignsDashboard from './CampaignsDashboard';
 import AnnouncementsDashboard from './AnnouncementsDashboard';
+import LiveChallengesDashboard from './LiveChallengesDashboard';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
 
@@ -21,7 +22,7 @@ const navigation = [
   { label: 'Performance', icon: ChartNoAxesCombined },
   { label: 'Campaigns', icon: Megaphone },
   { label: 'Announcements', icon: Radio },
-  { label: 'Events', icon: CalendarDays },
+  { label: 'Live Challenges', icon: Trophy },
   { label: 'Invitations', icon: Ticket },
   { label: 'Reports', icon: FileBarChart },
   { label: 'Activity Log', icon: Activity },
@@ -135,7 +136,7 @@ function App() {
     Performance: 'Monitor creator performance and upload reporting data.',
     Campaigns: 'Create and manage creator campaigns.',
     Announcements: 'Share important updates with your creators.',
-    Events: 'Organise and manage network events.',
+    'Live Challenges': 'Create and manage live challenges for your creator network.',
     Invitations: 'Generate and manage creator invitation codes.',
     Reports: 'Review and export network reports.',
     'Activity Log': 'Track actions and changes across your management system.',
@@ -290,7 +291,7 @@ function App() {
               <h1>{activePage === 'Overview' ? 'Welcome to VEYRA.' : activePage}</h1>
               <p>{pageDescriptions[activePage]}</p>
             </div>
-            {activePage !== 'Overview' && activePage !== 'Campaigns' && activePage !== 'Announcements' && (
+            {activePage !== 'Overview' && activePage !== 'Campaigns' && activePage !== 'Announcements' && activePage !== 'Live Challenges' && (
               <button className="primary-button" onClick={() => alert('This feature will be connected to the backend in a later step.')}>
                 <Plus size={17} /> Create new
               </button>
@@ -373,6 +374,8 @@ function App() {
             <CampaignsDashboard />
           ) : activePage === 'Announcements' ? (
             <AnnouncementsDashboard />
+          ) : activePage === 'Live Challenges' ? (
+            <LiveChallengesDashboard />
           ) : activePage === 'Performance' ? (
           <PerformanceDashboard />
         ) : activePage === 'Creators' ? (

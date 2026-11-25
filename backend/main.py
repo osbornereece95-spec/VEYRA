@@ -1,4 +1,4 @@
-﻿
+
 
 import os
 import json
@@ -234,6 +234,15 @@ class ManagementAnnouncementRequest(BaseModel):
     message: str = Field(min_length=1, max_length=5000)
     status: str = Field(default="draft", max_length=20)
 
+
+class ManagementLiveChallengeRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=160)
+    description: str = Field(min_length=1, max_length=5000)
+    instructions: str = Field(min_length=1, max_length=10000)
+    reward: str | None = Field(default=None, max_length=500)
+    start_date: date | None = None
+    end_date: date | None = None
+    status: str = Field(default="draft", max_length=20)
 
 def hash_invitation(code: str) -> str:
     return hashlib.sha256(code.strip().encode()).hexdigest()
@@ -1075,6 +1084,74 @@ def validate_management_announcement(data):
 
 
 # ============================================================
+def ensure_management_live_challenges_table(db):
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS management_live_challenges (
+            id BIGSERIAL PRIMARY KEY,
+            title TEXT NOT NULL,
+            description TEXT NOT NULL,
+            instructions TEXT NOT NULL,
+            reward TEXT,
+            start_date DATE,
+            end_date DATE,
+            status TEXT NOT NULL DEFAULT 'draft'
+                CHECK (status IN ('draft', 'published')),
+            created_by TEXT,
+            published_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            CHECK (
+                start_date IS NULL
+                OR end_date IS NULL
+                OR end_date >= start_date
+            )
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE INDEX IF NOT EXISTS
+            management_live_challenges_status_idx
+        ON management_live_challenges (status, end_date)
+        """
+    )
+
+
+def validate_management_live_challenge(data):
+    title = data.title.strip()
+    description = data.description.strip()
+    instructions = data.instructions.strip()
+    reward = (data.reward or "").strip() or None
+    status = data.status.strip().lower()
+
+    if not title:
+        raise HTTPException(status_code=422, detail="Challenge title is required")
+    if not description:
+        raise HTTPException(status_code=422, detail="Challenge description is required")
+    if not instructions:
+        raise HTTPException(status_code=422, detail="Challenge instructions are required")
+    if status not in ("draft", "published"):
+        raise HTTPException(
+            status_code=422,
+            detail="Challenge status must be draft or published"
+        )
+    if data.start_date and data.end_date and data.end_date < data.start_date:
+        raise HTTPException(
+            status_code=422,
+            detail="Challenge end date cannot be before its start date"
+        )
+
+    return (
+        title,
+        description,
+        instructions,
+        reward,
+        data.start_date,
+        data.end_date,
+        status,
+    )
+
 # VEYRA WEB PUSH NOTIFICATIONS
 # ============================================================
 
@@ -1454,6 +1531,158 @@ def unsubscribe_from_notifications(
         "message": "Device notification subscription removed",
         "remaining_devices": remaining["total"],
     }
+@app.get("/management/live-challenges")
+def management_list_live_challenges(
+    founder=Depends(get_management_founder)
+):
+    with connect_db() as db:
+        ensure_management_live_challenges_table(db)
+        challenges = db.execute(
+            """
+            SELECT
+                id, title, description, instructions, reward,
+                start_date, end_date, status,
+                CASE
+                    WHEN status = 'published'
+                         AND end_date < CURRENT_DATE THEN 'ended'
+                    ELSE status
+                END AS display_status,
+                created_by, published_at, created_at, updated_at
+            FROM management_live_challenges
+            ORDER BY updated_at DESC, id DESC
+            """
+        ).fetchall()
+
+    return {
+        "total": len(challenges),
+        "challenges": [dict(item) for item in challenges]
+    }
+
+
+@app.post("/management/live-challenges", status_code=201)
+def management_create_live_challenge(
+    data: ManagementLiveChallengeRequest,
+    founder=Depends(get_management_founder)
+):
+    (
+        title, description, instructions, reward,
+        start_date, end_date, status
+    ) = validate_management_live_challenge(data)
+
+    with connect_db() as db:
+        ensure_management_live_challenges_table(db)
+        challenge = db.execute(
+            """
+            INSERT INTO management_live_challenges (
+                title, description, instructions, reward,
+                start_date, end_date, status, created_by, published_at
+            )
+            VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s,
+                CASE WHEN %s = 'published' THEN NOW() ELSE NULL END
+            )
+            RETURNING
+                id, title, description, instructions, reward,
+                start_date, end_date, status, created_by,
+                published_at, created_at, updated_at
+            """,
+            (
+                title, description, instructions, reward,
+                start_date, end_date, status, founder["email"], status
+            )
+        ).fetchone()
+
+    return {
+        "message": "Live challenge created successfully",
+        "challenge": dict(challenge)
+    }
+
+
+@app.put("/management/live-challenges/{challenge_id}")
+def management_update_live_challenge(
+    challenge_id: int,
+    data: ManagementLiveChallengeRequest,
+    founder=Depends(get_management_founder)
+):
+    (
+        title, description, instructions, reward,
+        start_date, end_date, status
+    ) = validate_management_live_challenge(data)
+
+    with connect_db() as db:
+        ensure_management_live_challenges_table(db)
+        existing = db.execute(
+            """
+            SELECT id
+            FROM management_live_challenges
+            WHERE id = %s
+            FOR UPDATE
+            """,
+            (challenge_id,)
+        ).fetchone()
+
+        if not existing:
+            raise HTTPException(status_code=404, detail="Live challenge not found")
+
+        challenge = db.execute(
+            """
+            UPDATE management_live_challenges
+            SET
+                title = %s,
+                description = %s,
+                instructions = %s,
+                reward = %s,
+                start_date = %s,
+                end_date = %s,
+                status = %s,
+                published_at = CASE
+                    WHEN %s = 'draft' THEN NULL
+                    WHEN published_at IS NULL THEN NOW()
+                    ELSE published_at
+                END,
+                updated_at = NOW()
+            WHERE id = %s
+            RETURNING
+                id, title, description, instructions, reward,
+                start_date, end_date, status, created_by,
+                published_at, created_at, updated_at
+            """,
+            (
+                title, description, instructions, reward,
+                start_date, end_date, status, status, challenge_id
+            )
+        ).fetchone()
+
+    return {
+        "message": "Live challenge updated successfully",
+        "challenge": dict(challenge)
+    }
+
+
+@app.delete("/management/live-challenges/{challenge_id}")
+def management_delete_live_challenge(
+    challenge_id: int,
+    founder=Depends(get_management_founder)
+):
+    with connect_db() as db:
+        ensure_management_live_challenges_table(db)
+        deleted = db.execute(
+            """
+            DELETE FROM management_live_challenges
+            WHERE id = %s
+            RETURNING id
+            """,
+            (challenge_id,)
+        ).fetchone()
+
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Live challenge not found")
+
+    return {
+        "message": "Live challenge permanently deleted",
+        "challenge_id": challenge_id
+    }
+
 @app.get("/management/announcements")
 def management_list_announcements(
     founder=Depends(get_management_founder)
@@ -2650,6 +2879,33 @@ def get_profile_picture(filename: str):
         status_code=302
     )
 
+
+@app.get("/live-challenges")
+def creator_list_live_challenges(user=Depends(get_current_user)):
+    with connect_db() as db:
+        ensure_management_live_challenges_table(db)
+        challenges = db.execute(
+            """
+            SELECT
+                id, title, description, instructions, reward,
+                start_date, end_date,
+                CASE
+                    WHEN end_date IS NOT NULL
+                         AND end_date < CURRENT_DATE THEN 'ended'
+                    ELSE 'published'
+                END AS display_status,
+                published_at
+            FROM management_live_challenges
+            WHERE status = 'published'
+              AND (end_date IS NULL OR end_date >= CURRENT_DATE)
+            ORDER BY start_date ASC NULLS LAST, id DESC
+            """
+        ).fetchall()
+
+    return {
+        "total": len(challenges),
+        "challenges": [dict(item) for item in challenges]
+    }
 
 @app.get("/announcements")
 def creator_list_announcements(user=Depends(get_current_user)):

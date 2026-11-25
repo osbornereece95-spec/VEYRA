@@ -809,7 +809,7 @@ function GoalsScreen({
 
 function EventsScreen({
   refreshing,
-  onRefresh, user, campaigns, campaignsLoading, campaignsError, announcements, announcementsLoading, announcementsError }) {
+  onRefresh, user, campaigns, campaignsLoading, campaignsError, challenges, challengesLoading, challengesError, announcements, announcementsLoading, announcementsError }) {
   return (
     <ScrollView
       refreshControl={Platform.OS === 'web' ? undefined : <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.white} colors={[C.white]} progressBackgroundColor={C.card} />}
@@ -887,15 +887,66 @@ function EventsScreen({
         ))
       )}
 
-      <View style={styles.infoCard}>
-        <View style={styles.comingSoonRow}>
-          <Text style={styles.infoTitle}>LIVE challenges</Text>
-          <Text style={styles.comingSoon}>COMING SOON</Text>
-        </View>
+      <View style={styles.comingSoonRow}>
+        <Text style={styles.infoTitle}>LIVE CHALLENGES</Text>
         <Text style={styles.muted}>
-          Take part in challenges and creator competitions.
+          {challenges.length} {challenges.length === 1 ? 'CHALLENGE' : 'CHALLENGES'}
         </Text>
       </View>
+
+      {challengesLoading ? (
+        <View style={styles.infoCard}>
+          <ActivityIndicator color={C.white} size="small" />
+          <Text style={styles.muted}>Loading live challenges...</Text>
+        </View>
+      ) : challengesError ? (
+        <View style={styles.infoCard}>
+          <Text style={styles.infoTitle}>Live challenges unavailable</Text>
+          <Text style={styles.muted}>{challengesError}</Text>
+        </View>
+      ) : challenges.length === 0 ? (
+        <View style={styles.infoCard}>
+          <Text style={styles.infoTitle}>No live challenges yet</Text>
+          <Text style={styles.muted}>
+            Published challenges and creator competitions will appear here.
+          </Text>
+        </View>
+      ) : (
+        challenges.map((challenge) => (
+          <View style={styles.infoCard} key={String(challenge.id)}>
+            <View style={styles.comingSoonRow}>
+              <Text style={styles.infoTitle}>
+                {challenge.title || 'Untitled challenge'}
+              </Text>
+              <Text style={styles.comingSoon}>
+                {(challenge.display_status || 'published').toUpperCase()}
+              </Text>
+            </View>
+            {!!challenge.description && (
+              <Text style={styles.muted}>{challenge.description}</Text>
+            )}
+            {!!challenge.instructions && (
+              <>
+                <Text style={styles.infoTitle}>HOW TO TAKE PART</Text>
+                <Text style={styles.muted}>{challenge.instructions}</Text>
+              </>
+            )}
+            {!!challenge.reward && (
+              <>
+                <Text style={styles.infoTitle}>REWARD</Text>
+                <Text style={styles.muted}>{challenge.reward}</Text>
+              </>
+            )}
+            {(challenge.start_date || challenge.end_date) && (
+              <Text style={styles.muted}>
+                {challenge.start_date ? String(challenge.start_date).slice(0, 10) : 'Start date TBC'}
+                {'  -  '}
+                {challenge.end_date ? String(challenge.end_date).slice(0, 10) : 'No end date'}
+              </Text>
+            )}
+          </View>
+        ))
+      )}
 
       <View style={styles.comingSoonRow}>
         <Text style={styles.infoTitle}>ANNOUNCEMENTS</Text>
@@ -1185,6 +1236,9 @@ export default function App() {
   const [campaigns, setCampaigns] = useState([]);
   const [campaignsLoading, setCampaignsLoading] = useState(false);
   const [campaignsError, setCampaignsError] = useState('');
+  const [challenges, setChallenges] = useState([]);
+  const [challengesLoading, setChallengesLoading] = useState(false);
+  const [challengesError, setChallengesError] = useState('');
   const [announcements, setAnnouncements] = useState([]);
   const [announcementsLoading, setAnnouncementsLoading] = useState(false);
   const [announcementsError, setAnnouncementsError] = useState('');
@@ -1266,6 +1320,51 @@ export default function App() {
       cancelled = true;
     };
   }, [user]);
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadChallenges() {
+      if (!user) {
+        setChallenges([]);
+        setChallengesError('');
+        setChallengesLoading(false);
+        return;
+      }
+
+      setChallengesLoading(true);
+      setChallengesError('');
+
+      try {
+        const token = await getStoredToken();
+
+        if (!token) {
+          throw new Error('Please sign in again to load live challenges.');
+        }
+
+        const result = await apiRequest('/live-challenges', 'GET', null, token);
+
+        if (!cancelled) {
+          setChallenges(Array.isArray(result.challenges) ? result.challenges : []);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setChallenges([]);
+          setChallengesError(error?.message || 'Unable to load live challenges.');
+        }
+      } finally {
+        if (!cancelled) {
+          setChallengesLoading(false);
+        }
+      }
+    }
+
+    loadChallenges();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -1456,10 +1555,11 @@ export default function App() {
         apiRequest('/me', 'GET', null, token),
         apiRequest('/my-performance', 'GET', null, token),
         apiRequest('/campaigns', 'GET', null, token),
+        apiRequest('/live-challenges', 'GET', null, token),
         apiRequest('/announcements', 'GET', null, token),
       ]);
 
-      const [profileResult, performanceResult, campaignsResult, announcementsResult] = results;
+      const [profileResult, performanceResult, campaignsResult, challengesResult, announcementsResult] = results;
 
       if (profileResult.status === 'fulfilled') setUser(profileResult.value);
 
@@ -1477,6 +1577,13 @@ export default function App() {
         setCampaignsError(campaignsResult.reason?.message || 'Unable to refresh campaigns.');
       }
 
+      if (challengesResult.status === 'fulfilled') {
+        setChallenges(Array.isArray(challengesResult.value.challenges) ? challengesResult.value.challenges : []);
+        setChallengesError('');
+      } else {
+        setChallengesError(challengesResult.reason?.message || 'Unable to refresh live challenges.');
+      }
+
       if (announcementsResult.status === 'fulfilled') {
         setAnnouncements(Array.isArray(announcementsResult.value.announcements) ? announcementsResult.value.announcements : []);
         setAnnouncementsError('');
@@ -1487,6 +1594,7 @@ export default function App() {
       const message = error?.message || 'Unable to refresh VEYRA. Please try again.';
       setPerformanceError(message);
       setCampaignsError(message);
+      setChallengesError(message);
       setAnnouncementsError(message);
     } finally {
       setRefreshing(false);
@@ -1899,6 +2007,9 @@ export default function App() {
         campaigns={campaigns}
         campaignsLoading={campaignsLoading}
         campaignsError={campaignsError}
+        challenges={challenges}
+        challengesLoading={challengesLoading}
+        challengesError={challengesError}
         announcements={announcements}
         announcementsLoading={announcementsLoading}
         announcementsError={announcementsError}
